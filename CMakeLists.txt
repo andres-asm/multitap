@@ -8,6 +8,7 @@ project(multitap LANGUAGES C CXX)
 option(MULTITAP_SYSTEM_SDL3        "Use the system SDL3 instead of deps/SDL" OFF)
 option(MULTITAP_WARNINGS_AS_ERRORS "Treat warnings in our own code as errors"    OFF)
 option(MULTITAP_SANITIZE           "Build our own code with ASan + UBSan"         OFF)
+option(MULTITAP_BUILD_TESTS        "Build test cores and register CTest tests"    ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
@@ -58,6 +59,14 @@ add_library(imgui STATIC
 target_include_directories(imgui SYSTEM PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 
+# libretro API header. Only include/libretro*.h is used; none of
+# libretro-common's .c files are compiled (see CLAUDE.md).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/libretro-common/include/libretro.h")
+    message(FATAL_ERROR "deps/libretro-common is empty. Run: git submodule update --init --recursive")
+endif()
+add_library(libretro_api INTERFACE)
+target_include_directories(libretro_api SYSTEM INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/deps/libretro-common/include")
+
 # ---------------------------------------------------------------------------
 # Flags for OUR code only. Apply with: multitap_set_project_flags(<target>)
 # ---------------------------------------------------------------------------
@@ -86,8 +95,14 @@ function(multitap_set_project_flags target)
     endif()
 endfunction()
 
+if(MULTITAP_BUILD_TESTS)
+    enable_testing()
+endif()
+
 # ---------------------------------------------------------------------------
 # Programs
 # ---------------------------------------------------------------------------
+add_subdirectory(hosts/common)
+add_subdirectory(hosts/host-libretro)
 add_subdirectory(frontends/common)
 add_subdirectory(frontends/piccolo)
