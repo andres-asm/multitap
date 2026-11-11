@@ -179,6 +179,7 @@ static VkDebugUtilsMessengerCreateInfoEXT debug_messenger_create_info()
 // ---------------------------------------------------------------------------
 
 bool vulkan_context_create_instance(VulkanContext* context,
+                                    const char* application_name,
                                     const char* const* required_extensions,
                                     uint32_t required_extension_count)
 {
@@ -189,7 +190,7 @@ bool vulkan_context_create_instance(VulkanContext* context,
     }
     if (loader_version < VULKAN_REQUIRED_API_VERSION)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_GPU, "Vulkan loader is %u.%u, piccolo needs 1.3",
+        SDL_LogError(SDL_LOG_CATEGORY_GPU, "Vulkan loader is %u.%u, we need 1.3",
                      VK_API_VERSION_MAJOR(loader_version), VK_API_VERSION_MINOR(loader_version));
         return false;
     }
@@ -224,7 +225,7 @@ bool vulkan_context_create_instance(VulkanContext* context,
     uint32_t layer_count = 0;
     context->validation_enabled = false;
 
-#if defined(PICCOLO_VULKAN_VALIDATION)
+#if defined(MULTITAP_VULKAN_VALIDATION)
     if (instance_layer_available(VALIDATION_LAYER_NAME) &&
         instance_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
     {
@@ -243,7 +244,7 @@ bool vulkan_context_create_instance(VulkanContext* context,
 
     VkApplicationInfo app_info = {
         .sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName   = "piccolo",
+        .pApplicationName   = application_name,
         .applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0),
         .pEngineName        = "multitap",
         .engineVersion      = VK_MAKE_API_VERSION(0, 0, 1, 0),

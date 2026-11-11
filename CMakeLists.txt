@@ -89,4 +89,5 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Programs
 # ---------------------------------------------------------------------------
+add_subdirectory(frontends/common)
 add_subdirectory(frontends/piccolo)

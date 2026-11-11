@@ -1,15 +1,16 @@
 # Multitap
 
-Multi-emulator frontend (work in progress).
+Multi-emulator frontend (early work in progress).
+
+Multitap aims to run games through interchangeable emulation backends
+(libretro first, then others) behind one frontend. It is in early days so far
 
 | Path                   | What                                                        |
 |------------------------|-------------------------------------------------------------|
-| `frontends/piccolo/`   | Small test frontend for `host-libretro` (SDL3 + Vulkan + ImGui) |
-| `hosts/host-libretro/` | libretro core host (not started)                            |
+| `frontends/common/`    | Code shared by all frontends (Vulkan, swapchain, ImGui glue) |
+| `frontends/piccolo/`   | Basic libretro frontend (SDL3 + Vulkan + ImGui)             |
+| `hosts/host-libretro/` | Our libretro implementation (not started)                   |
 | `deps/`                | Third-party code as git submodules (never edited)           |
-| `STYLE.md`             | Code style: modern C++ written like C                       |
-| `CLAUDE.md`            | Working brief for Claude Code sessions                      |
-| `docs/design-notes.md` | Full design record: decisions, recommendations, open items  |
 
 ## Dependencies
 
@@ -47,3 +48,29 @@ Options:
 | `MULTITAP_SANITIZE`           | OFF     | ASan + UBSan for our code (GCC/Clang)     |
 
 Debug builds enable Vulkan validation when the layer is installed.
+
+## How this is built
+
+Multitap is developed with AI assistance. Most of the code is written by AI
+models (currently Anthropic's Claude) working under my direction; I contributed
+to RetroArch/libretro for years, so I know the inner workings of libretro and
+Retroarch and I know what I like and what I don't like about it.
+
+What that means in practice:
+
+- **Design comes first.** Architecture and decisions are made and written down
+  before code is generated. The AI implements a plan; it doesn't invent the project.
+- **Small, scoped changes.** One feature at a time, each with a stated goal and
+  a way to check it. No large unreviewed drops of code.
+- **Readability is a hard requirement.** code style is deliberately
+  restricted so any human can read, debug and fix every file.
+- **Checked, not trusted.** The build treats warnings as errors, and debug
+  builds run with the Vulkan validation layers. AddressSanitizer and
+  UndefinedBehaviorSanitizer builds are part of the regular testing.
+
+If you find code that is hard to follow, that's a bug. Please open an issue.
+
+## License
+
+MIT, see [`LICENSE`](LICENSE). Third-party code in `deps/` keeps its own license
+(Dear ImGui: MIT, SDL: zlib).

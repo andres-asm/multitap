@@ -1,6 +1,7 @@
 #pragma once
 
-// Vulkan instance, physical device and logical device for piccolo.
+// Vulkan instance, physical device and logical device.
+// Shared by all frontends (frontends/common).
 //
 // Creation is split in two steps because choosing a GPU needs a surface
 // (to check it can present to our window), and the surface needs an instance:
@@ -13,7 +14,7 @@
 #include <cstdint>
 #include <vulkan/vulkan.h>
 
-// piccolo requires Vulkan 1.3 (dynamic rendering + synchronization2 are core there).
+// We require Vulkan 1.3 (dynamic rendering + synchronization2 are core there).
 constexpr uint32_t VULKAN_REQUIRED_API_VERSION = VK_API_VERSION_1_3;
 
 struct VulkanContext
@@ -33,8 +34,10 @@ struct VulkanContext
     VkDescriptorPool imgui_descriptor_pool = VK_NULL_HANDLE;
 };
 
+// application_name: shown in tools like RenderDoc and in driver profiles (e.g. "piccolo").
 // required_extensions: what the window system needs (from SDL_Vulkan_GetInstanceExtensions).
 bool vulkan_context_create_instance(VulkanContext* context,
+                                    const char* application_name,
                                     const char* const* required_extensions,
                                     uint32_t required_extension_count);
 

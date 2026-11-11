@@ -1,6 +1,6 @@
 #pragma once
 
-// Dear ImGui setup for piccolo's development/debug UI.
+// Dear ImGui setup for a frontend's development/debug UI.
 // Thin wrapper over the official imgui SDL3 + Vulkan backends (deps/imgui/backends).
 
 #include <vulkan/vulkan.h>

@@ -1,4 +1,4 @@
-// piccolo: test frontend for host-libretro.
+// piccolo: basic libretro frontend built on host-libretro.
 //
 // Current scope: open a 1920x1080 SDL3 window, render with Vulkan, and show
 // one floating Dear ImGui window. No cores, no host, no audio yet.
@@ -109,7 +109,7 @@ static bool app_init(App* app)
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Vulkan_GetInstanceExtensions failed: %s", SDL_GetError());
         return false;
     }
-    if (!vulkan_context_create_instance(&app->vulkan, sdl_extensions, sdl_extension_count))
+    if (!vulkan_context_create_instance(&app->vulkan, "piccolo", sdl_extensions, sdl_extension_count))
     {
         return false;
     }
