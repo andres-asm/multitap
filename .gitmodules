@@ -4,3 +4,10 @@
 [submodule "deps/SDL"]
 	path = deps/SDL
 	url = https://github.com/libsdl-org/SDL.git
+[submodule "deps/libretro-common"]
+	path = deps/libretro-common
+	url = https://github.com/libretro/libretro-common.git
+	shallow = true
+[submodule "hosts/host-libretro/test-libretro"]
+	path = hosts/host-libretro/test-libretro
+	url = https://github.com/andres-asm/test-libretro.git
