@@ -8,7 +8,8 @@
 //   libretro_host_load_core()     dlopen, symbol check, set_environment, get_system_info, retro_init
 //   libretro_host_load_game()     retro_load_game, retro_get_system_av_info
 //   libretro_host_set_input()     (each frame) what the frontend's controls say
-//   libretro_host_run_frame()     (each frame) retro_run; the frame ends up in host->video
+//   libretro_host_run_frame()     (each frame) retro_run; the frame ends up in host->video,
+//                                 its audio in host->audio
 //   libretro_host_unload_game()   retro_unload_game
 //   libretro_host_unload_core()   retro_deinit, dlclose
 //
@@ -21,6 +22,7 @@
 #include <cstdint>
 
 #include "libretro.h"
+#include "libretro_audio.h"
 #include "libretro_core.h"
 #include "libretro_video.h"
 
@@ -51,6 +53,7 @@ struct LibretroHostStats
     uint64_t video_duplicates    = 0;   // video_refresh with NULL
     uint64_t video_errors        = 0;   // frames we couldn't store (bad format, HW frame, no memory)
     uint64_t audio_frames        = 0;   // stereo frames received (both audio callbacks)
+    uint64_t audio_errors        = 0;   // audio callbacks whose samples we couldn't store (no memory)
     uint64_t input_polls         = 0;
 };
 
@@ -84,9 +87,10 @@ struct LibretroHost
     retro_system_info    system_info = {};
     retro_system_av_info av_info     = {};
 
-    // Video and input exchanged with the core (see libretro_video.h).
-    LibretroVideoFrame video = {};
-    LibretroInputState input = {};
+    // Video, audio and input exchanged with the core (see libretro_video.h, libretro_audio.h).
+    LibretroVideoFrame  video = {};
+    LibretroAudioBuffer audio = {};   // this frame's audio only: cleared by every run_frame
+    LibretroInputState  input = {};
     LibretroHostStats  stats = {};
 
     // What the core asked for through the environment callback.
@@ -109,7 +113,8 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path);
 void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input);
 
 // Runs one frame (retro_run). Needs a loaded game. Returns false if nothing
-// could run (no game, or the core asked to shut down).
+// could run (no game, or the core asked to shut down). Afterwards host->audio
+// holds exactly the audio this frame produced; play or drop it before the next call.
 bool libretro_host_run_frame(LibretroHost* host);
 
 // Both are safe to call when nothing is loaded.

@@ -2,7 +2,8 @@
 //
 // Its job is checking that host-libretro implements libretro correctly, not
 // playing games (that's piccolo). Plain Dear ImGui UI: load a core and content,
-// run it, show its video, fixed controls (fixed_input.h). No audio output yet.
+// run it, show its video, play its audio (basic: audio_output.h), fixed controls
+// (fixed_input.h).
 //
 // Usage: libretro_test_frontend [core] [content]
 // Files can also be dragged onto the window (cores by extension, anything else is content).
@@ -17,6 +18,7 @@
 #include "imgui.h"
 
 #include "app_shell.h"
+#include "audio_output.h"
 #include "debug_ui.h"
 #include "fixed_input.h"
 #include "libretro_host.h"
@@ -54,6 +56,8 @@ struct App
 
     ImageArea    image_area = {};
     SDL_Gamepad* gamepad = nullptr;
+
+    AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +163,7 @@ static void core_stop(App* app)
     {
         destroy_core_texture(app);
     }
+    audio_output_destroy(&app->audio);
     libretro_host_unload_core(app->host);
     app->paused = false;
     app->image_area = ImageArea{};
@@ -202,6 +207,9 @@ static void core_start(App* app)
         core_stop(app);
         return;
     }
+
+    // No sound is not fatal for a test frontend: the core still runs (the reason is logged).
+    audio_output_create(&app->audio, app->host->av_info.timing.sample_rate);
 
     set_status(app, "Running %s", app->host->system_info.library_name != nullptr ? app->host->system_info.library_name : "core");
 }
@@ -257,6 +265,16 @@ static void run_core_frame(App* app)
         return;
     }
 
+    // host->audio holds exactly this frame's audio. A core may have changed its
+    // sample rate this frame (SET_SYSTEM_AV_INFO), so follow it first.
+    // Single-stepping (paused) stays silent: one frame of audio is a ~16 ms blip
+    // after a gap, which would only count as an underrun every step.
+    audio_output_set_sample_rate(&app->audio, app->host->av_info.timing.sample_rate);
+    if (!app->paused)
+    {
+        audio_output_push(&app->audio, app->host->audio.samples, app->host->audio.frames);
+    }
+
     // A core may grow its image at runtime (SET_SYSTEM_AV_INFO); recreate the texture before drawing.
     const LibretroVideoFrame* video = &app->host->video;
     if (video->width > 0 && video->height > 0)
@@ -307,6 +325,9 @@ static void draw_controls_window(App* app)
     if (ImGui::Button(app->paused ? "Resume" : "Pause"))
     {
         app->paused = !app->paused;
+        // Don't leave the last ~100 ms queued: it would play now (after pausing)
+        // or, worse, resurface after resuming.
+        audio_output_clear(&app->audio);
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!app->paused);
@@ -338,7 +359,22 @@ static void draw_controls_window(App* app)
                     host->video.width, host->video.height);
         ImGui::Text("Duplicates:    %llu", static_cast<unsigned long long>(stats->video_duplicates));
         ImGui::Text("Video errors:  %llu", static_cast<unsigned long long>(stats->video_errors));
-        ImGui::Text("Audio frames:  %llu (not played yet)", static_cast<unsigned long long>(stats->audio_frames));
+        ImGui::Text("Audio frames:  %llu (%zu this frame)", static_cast<unsigned long long>(stats->audio_frames),
+                    host->audio.frames);
+        if (app->audio.stream != nullptr)
+        {
+            ImGui::Text("Audio out:     %d Hz, %u ms queued", app->audio.sample_rate, audio_output_queued_ms(&app->audio));
+            ImGui::Text("Underruns:     %llu   Dropped: %llu frames", static_cast<unsigned long long>(app->audio.underruns),
+                        static_cast<unsigned long long>(app->audio.dropped_frames));
+        }
+        else
+        {
+            ImGui::TextUnformatted("Audio out:     none (see the log)");
+        }
+        if (stats->audio_errors > 0)
+        {
+            ImGui::Text("Audio errors:  %llu", static_cast<unsigned long long>(stats->audio_errors));
+        }
         ImGui::Text("Joypad port 0: 0x%04x", host->input.joypad_buttons[0]);
     }
 

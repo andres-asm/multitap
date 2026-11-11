@@ -8,6 +8,7 @@ add_library(host_libretro STATIC
     src/libretro_environment.cpp
     src/libretro_environment_names.cpp
     src/libretro_video.cpp
+    src/libretro_audio.cpp
 )
 
 target_include_directories(host_libretro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -89,6 +90,12 @@ if(MULTITAP_BUILD_TESTS)
     target_link_libraries(host_libretro_video_test PRIVATE host_libretro)
     multitap_set_project_flags(host_libretro_video_test)
     add_test(NAME host_libretro_video_conversion COMMAND host_libretro_video_test)
+
+    # Per-frame audio buffer (single-sample and batch appends, growth, clear).
+    add_executable(host_libretro_audio_test tests/audio_buffer_test.cpp)
+    target_link_libraries(host_libretro_audio_test PRIVATE host_libretro)
+    multitap_set_project_flags(host_libretro_audio_test)
+    add_test(NAME host_libretro_audio_buffer COMMAND host_libretro_audio_test)
 
     # The interactive test wizard core lives in its own repo, pulled in as a
     # submodule. Built when present; it isn't run by CTest (it needs a frontend

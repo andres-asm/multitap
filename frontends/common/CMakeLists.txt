@@ -9,6 +9,7 @@ add_library(frontend_common STATIC
     debug_ui.cpp
     vk_texture.cpp
     app_shell.cpp
+    audio_output.cpp
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

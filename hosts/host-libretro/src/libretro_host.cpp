@@ -100,27 +100,51 @@ static void RETRO_CALLCONV video_refresh_callback(const void* data, unsigned wid
     host->stats.video_frames++;
 }
 
-// Audio output is a later feature: for now we count what the core sends and
-// tell it everything was consumed, so it keeps running at normal speed.
+// Both audio callbacks copy into host->audio (the core's pointer is only valid
+// during the call). The frontend plays it after retro_run returns.
+static void store_audio(LibretroHost* host, const int16_t* samples, size_t frames)
+{
+    if (!libretro_audio_append(&host->audio, samples, frames))
+    {
+        if (host->stats.audio_errors == 0)
+        {
+            host_log(LogLevel::error, "Could not store %zu audio frames (out of memory)", frames);
+        }
+        host->stats.audio_errors++;
+        return;
+    }
+    host->stats.audio_frames += frames;
+}
+
 static void RETRO_CALLCONV audio_sample_callback(int16_t left, int16_t right)
 {
-    (void)left;
-    (void)right;
     LibretroHost* host = g_current_host;
-    if (host != nullptr)
+    if (host == nullptr)
     {
-        host->stats.audio_frames++;
+        host_log(LogLevel::error, "audio_sample called with no current instance");
+        return;
     }
+    int16_t frame[2] = { left, right };
+    store_audio(host, frame, 1);
 }
 
 static size_t RETRO_CALLCONV audio_sample_batch_callback(const int16_t* data, size_t frames)
 {
-    (void)data;
     LibretroHost* host = g_current_host;
-    if (host != nullptr)
+    if (host == nullptr)
     {
-        host->stats.audio_frames += frames;
+        host_log(LogLevel::error, "audio_sample_batch called with no current instance");
+        return 0;
     }
+    if (data == nullptr)
+    {
+        return 0;
+    }
+    store_audio(host, data, frames);
+
+    // We always report everything as consumed, even if storing failed: the
+    // return value is meant for cores that pace themselves on it, and telling
+    // them "0" would make some of them retry forever inside retro_run.
     return frames;
 }
 
@@ -449,6 +473,7 @@ void libretro_host_unload_game(LibretroHost* host)
     }
 
     libretro_video_free(&host->video);
+    libretro_audio_free(&host->audio);
 
     // Only now: the core may have pointed into this buffer until retro_unload_game().
     delete[] host->content_data;
@@ -472,6 +497,9 @@ bool libretro_host_run_frame(LibretroHost* host)
     {
         return false;
     }
+
+    // host->audio holds only this frame's audio; the frontend consumed the last one.
+    libretro_audio_clear(&host->audio);
 
     host_enter(host);
     host->core.retro_run();
