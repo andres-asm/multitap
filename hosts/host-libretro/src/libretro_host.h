@@ -7,7 +7,8 @@
 //
 //   libretro_host_load_core()     dlopen, symbol check, set_environment, get_system_info, retro_init
 //   libretro_host_load_game()     retro_load_game, retro_get_system_av_info
-//   (running frames: next feature)
+//   libretro_host_set_input()     (each frame) what the frontend's controls say
+//   libretro_host_run_frame()     (each frame) retro_run; the frame ends up in host->video
 //   libretro_host_unload_game()   retro_unload_game
 //   libretro_host_unload_core()   retro_deinit, dlclose
 //
@@ -21,8 +22,37 @@
 
 #include "libretro.h"
 #include "libretro_core.h"
+#include "libretro_video.h"
 
 constexpr size_t LIBRETRO_PATH_MAX = 4096;
+
+constexpr unsigned LIBRETRO_MAX_PORTS = 4;
+
+// Input as the frontend sees it this frame, in RetroPad terms. The frontend
+// fills this (keyboard, gamepads, mouse... mapped however it likes) and hands it
+// over with libretro_host_set_input() before libretro_host_run_frame().
+struct LibretroInputState
+{
+    uint16_t joypad_buttons[LIBRETRO_MAX_PORTS] = {};   // bit N = RETRO_DEVICE_ID_JOYPAD_N
+    int16_t  analog[LIBRETRO_MAX_PORTS][2][2]   = {};   // [port][left/right stick][x/y], -0x8000..0x7fff
+
+    // Pointer (port 0 only): -0x7fff..0x7fff across the image the core draws.
+    bool     pointer_valid   = false;   // false = pointer outside the image / unknown
+    int16_t  pointer_x       = 0;
+    int16_t  pointer_y       = 0;
+    bool     pointer_pressed = false;
+};
+
+// Counters for debug UIs and tests.
+struct LibretroHostStats
+{
+    uint64_t frames_run          = 0;   // retro_run calls
+    uint64_t video_frames        = 0;   // video_refresh with a new image
+    uint64_t video_duplicates    = 0;   // video_refresh with NULL
+    uint64_t video_errors        = 0;   // frames we couldn't store (bad format, HW frame, no memory)
+    uint64_t audio_frames        = 0;   // stereo frames received (both audio callbacks)
+    uint64_t input_polls         = 0;
+};
 
 // Directories we hand to the core. Empty string = "not defined".
 struct LibretroHostConfig
@@ -54,6 +84,11 @@ struct LibretroHost
     retro_system_info    system_info = {};
     retro_system_av_info av_info     = {};
 
+    // Video and input exchanged with the core (see libretro_video.h).
+    LibretroVideoFrame video = {};
+    LibretroInputState input = {};
+    LibretroHostStats  stats = {};
+
     // What the core asked for through the environment callback.
     retro_pixel_format pixel_format       = RETRO_PIXEL_FORMAT_0RGB1555;   // libretro's default
     bool               supports_no_game   = false;
@@ -69,6 +104,13 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
 
 // content_path == nullptr starts the core without content (needs SET_SUPPORT_NO_GAME).
 bool libretro_host_load_game(LibretroHost* host, const char* content_path);
+
+// Replaces the input the core will see on its next input_state calls.
+void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input);
+
+// Runs one frame (retro_run). Needs a loaded game. Returns false if nothing
+// could run (no game, or the core asked to shut down).
+bool libretro_host_run_frame(LibretroHost* host);
 
 // Both are safe to call when nothing is loaded.
 void libretro_host_unload_game(LibretroHost* host);

@@ -101,6 +101,11 @@ VkCommandBuffer renderer_command_buffer(const Renderer* renderer)
     return renderer->frames[renderer->frame_index].command_buffer;
 }
 
+uint32_t renderer_frame_index(const Renderer* renderer)
+{
+    return renderer->frame_index;
+}
+
 // ---------------------------------------------------------------------------
 // Layout transitions
 // ---------------------------------------------------------------------------
@@ -161,7 +166,7 @@ static void transition_to_present(VkCommandBuffer command_buffer, VkImage image)
 // ---------------------------------------------------------------------------
 
 RenderFrameResult renderer_begin_frame(Renderer* renderer, const VulkanContext* context,
-                                       const VulkanSwapchain* swapchain, ClearColor clear_color)
+                                       const VulkanSwapchain* swapchain)
 {
     FrameResources* frame = &renderer->frames[renderer->frame_index];
 
@@ -205,6 +210,15 @@ RenderFrameResult renderer_begin_frame(Renderer* renderer, const VulkanContext* 
         return RenderFrameResult::error;
     }
 
+    // Recording has started; uploads (copies, barriers) may be recorded now,
+    // before renderer_begin_rendering() starts the rendering pass.
+    return RenderFrameResult::ok;
+}
+
+void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapchain, ClearColor clear_color)
+{
+    FrameResources* frame = &renderer->frames[renderer->frame_index];
+
     transition_to_color_attachment(frame->command_buffer, swapchain->images[renderer->image_index]);
 
     VkRenderingAttachmentInfo color_attachment = {
@@ -227,8 +241,6 @@ RenderFrameResult renderer_begin_frame(Renderer* renderer, const VulkanContext* 
         .pColorAttachments    = &color_attachment,
     };
     vkCmdBeginRendering(frame->command_buffer, &rendering_info);
-
-    return RenderFrameResult::ok;
 }
 
 RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* context,

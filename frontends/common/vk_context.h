@@ -46,6 +46,11 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface);
 
 void vulkan_context_destroy(VulkanContext* context);
 
+// Finds a memory type allowed by `type_bits` (from VkMemoryRequirements) that has
+// all `properties`. Returns false if the device has none.
+bool vulkan_find_memory_type(const VulkanContext* context, uint32_t type_bits, VkMemoryPropertyFlags properties,
+                             uint32_t* memory_type_index);
+
 // Logs `what` and the result name when `result` is not VK_SUCCESS.
 // Returns true on VK_SUCCESS.
 bool vk_succeeded(VkResult result, const char* what);

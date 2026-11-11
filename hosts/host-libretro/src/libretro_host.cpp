@@ -57,40 +57,145 @@ static bool RETRO_CALLCONV environment_callback(unsigned command, void* data)
     return libretro_environment_handle(host, command, data);
 }
 
-// Video, audio and input are the next feature. These stubs exist because the
-// API requires the callbacks to be set before retro_run().
+// The callbacks below find their host through g_current_host. They are only
+// valid inside retro_run (and load/unload); outside it they log and do nothing.
 
 static void RETRO_CALLCONV video_refresh_callback(const void* data, unsigned width, unsigned height, size_t pitch)
 {
-    (void)data;
-    (void)width;
-    (void)height;
-    (void)pitch;
+    LibretroHost* host = g_current_host;
+    if (host == nullptr)
+    {
+        host_log(LogLevel::error, "video_refresh called with no current instance");
+        return;
+    }
+
+    // NULL = "same image as last frame" (we said yes to GET_CAN_DUPE). Keep the old copy.
+    if (data == nullptr)
+    {
+        host->video.duplicates++;
+        host->stats.video_duplicates++;
+        return;
+    }
+
+    // Hardware-rendered frames (OpenGL/Vulkan cores) aren't supported yet.
+    if (data == RETRO_HW_FRAME_BUFFER_VALID)
+    {
+        if (host->stats.video_errors == 0)
+        {
+            host_log(LogLevel::error, "The core sent a hardware-rendered frame; not supported yet");
+        }
+        host->stats.video_errors++;
+        return;
+    }
+
+    if (!libretro_video_store_frame(&host->video, data, width, height, pitch, host->pixel_format))
+    {
+        if (host->stats.video_errors == 0)
+        {
+            host_log(LogLevel::error, "Could not store a %ux%u video frame", width, height);
+        }
+        host->stats.video_errors++;
+        return;
+    }
+    host->stats.video_frames++;
 }
 
+// Audio output is a later feature: for now we count what the core sends and
+// tell it everything was consumed, so it keeps running at normal speed.
 static void RETRO_CALLCONV audio_sample_callback(int16_t left, int16_t right)
 {
     (void)left;
     (void)right;
+    LibretroHost* host = g_current_host;
+    if (host != nullptr)
+    {
+        host->stats.audio_frames++;
+    }
 }
 
 static size_t RETRO_CALLCONV audio_sample_batch_callback(const int16_t* data, size_t frames)
 {
     (void)data;
-    return frames;   // "consumed everything"
+    LibretroHost* host = g_current_host;
+    if (host != nullptr)
+    {
+        host->stats.audio_frames += frames;
+    }
+    return frames;
 }
 
 static void RETRO_CALLCONV input_poll_callback(void)
 {
+    // The frontend already handed us this frame's input (libretro_host_set_input).
+    LibretroHost* host = g_current_host;
+    if (host != nullptr)
+    {
+        host->stats.input_polls++;
+    }
+}
+
+static int16_t joypad_state(const LibretroInputState* input, unsigned port, unsigned id)
+{
+    if (id == RETRO_DEVICE_ID_JOYPAD_MASK)
+    {
+        // All 16 buttons at once (we answered yes to GET_INPUT_BITMASKS).
+        // int16_t holds 16 bits; the core reads them back as a bitmask.
+        return static_cast<int16_t>(input->joypad_buttons[port]);
+    }
+    if (id < 16)
+    {
+        return (input->joypad_buttons[port] & (1u << id)) != 0 ? 1 : 0;
+    }
+    return 0;
+}
+
+static int16_t analog_state(const LibretroInputState* input, unsigned port, unsigned index, unsigned id)
+{
+    if ((index == RETRO_DEVICE_INDEX_ANALOG_LEFT || index == RETRO_DEVICE_INDEX_ANALOG_RIGHT) &&
+        (id == RETRO_DEVICE_ID_ANALOG_X || id == RETRO_DEVICE_ID_ANALOG_Y))
+    {
+        return input->analog[port][index][id];
+    }
+    if (index == RETRO_DEVICE_INDEX_ANALOG_BUTTON && id < 16)
+    {
+        // Analog buttons: we only have digital ones, so it's fully pressed or not.
+        return (input->joypad_buttons[port] & (1u << id)) != 0 ? 0x7fff : 0;
+    }
+    return 0;
+}
+
+static int16_t pointer_state(const LibretroInputState* input, unsigned port, unsigned index, unsigned id)
+{
+    if (port != 0 || index != 0 || !input->pointer_valid)
+    {
+        return 0;
+    }
+    switch (id)
+    {
+        case RETRO_DEVICE_ID_POINTER_X:       return input->pointer_x;
+        case RETRO_DEVICE_ID_POINTER_Y:       return input->pointer_y;
+        case RETRO_DEVICE_ID_POINTER_PRESSED: return input->pointer_pressed ? 1 : 0;
+        case RETRO_DEVICE_ID_POINTER_COUNT:   return input->pointer_pressed ? 1 : 0;
+        default:                              return 0;
+    }
 }
 
 static int16_t RETRO_CALLCONV input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id)
 {
-    (void)port;
-    (void)device;
-    (void)index;
-    (void)id;
-    return 0;
+    LibretroHost* host = g_current_host;
+    if (host == nullptr || port >= LIBRETRO_MAX_PORTS)
+    {
+        return 0;
+    }
+
+    // Cores may ask for subclassed devices (e.g. a specific pad type); the low bits are the base device.
+    switch (device & RETRO_DEVICE_MASK)
+    {
+        case RETRO_DEVICE_JOYPAD:  return joypad_state(&host->input, port, id);
+        case RETRO_DEVICE_ANALOG:  return analog_state(&host->input, port, index, id);
+        case RETRO_DEVICE_POINTER: return pointer_state(&host->input, port, index, id);
+        default:                   return 0;   // mouse, keyboard, lightgun: later
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,9 +448,35 @@ void libretro_host_unload_game(LibretroHost* host)
         host_log(LogLevel::info, "Content unloaded");
     }
 
+    libretro_video_free(&host->video);
+
     // Only now: the core may have pointed into this buffer until retro_unload_game().
     delete[] host->content_data;
     host->content_data = nullptr;
     host->content_size = 0;
     host->content_path[0] = '\0';
+}
+
+// ---------------------------------------------------------------------------
+// Running
+// ---------------------------------------------------------------------------
+
+void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input)
+{
+    host->input = *input;
+}
+
+bool libretro_host_run_frame(LibretroHost* host)
+{
+    if (!host->game_loaded || host->shutdown_requested)
+    {
+        return false;
+    }
+
+    host_enter(host);
+    host->core.retro_run();
+    host_leave(host);
+
+    host->stats.frames_run++;
+    return true;
 }

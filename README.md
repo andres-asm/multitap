@@ -10,7 +10,7 @@ Multitap aims to run games through interchangeable emulation backends
 | `frontends/common/`    | Code shared by all frontends (Vulkan, swapchain, ImGui glue) |
 | `frontends/piccolo/`   | Basic libretro frontend (SDL3 + Vulkan + ImGui)             |
 | `hosts/common/`        | Code shared by all core hosts (library loading, logging)     |
-| `hosts/host-libretro/` | Our libretro implementation (early: loads cores, no running yet) |
+| `hosts/host-libretro/` | Our libretro implementation + `libretro_test_frontend` (early: video and joypad, no audio yet) |
 | `deps/`                | Third-party code as git submodules (never edited)           |
 
 ## Dependencies
@@ -40,6 +40,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/frontends/piccolo/piccolo
+./build/hosts/host-libretro/libretro_test_frontend [core] [content]
 ```
 
 Options:

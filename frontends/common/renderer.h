@@ -4,16 +4,19 @@
 //
 // Usage each frame:
 //
-//   RenderFrameResult result = renderer_begin_frame(&renderer, &context, &swapchain, clear_color);
+//   RenderFrameResult result = renderer_begin_frame(&renderer, &context, &swapchain);
 //   if (result == RenderFrameResult::ok)
 //   {
+//       ... record uploads (texture copies) into renderer_command_buffer(&renderer) ...
+//       renderer_begin_rendering(&renderer, &swapchain, clear_color);
 //       ... record draws into renderer_command_buffer(&renderer) ...
 //       result = renderer_end_frame(&renderer, &context, &swapchain);
 //   }
 //   if (result == RenderFrameResult::swapchain_needs_recreate) { recreate the swapchain }
 //
-// Between begin and end the current swapchain image is in COLOR_ATTACHMENT_OPTIMAL
+// After renderer_begin_rendering() the swapchain image is in COLOR_ATTACHMENT_OPTIMAL
 // layout inside an active dynamic-rendering pass that has already been cleared.
+// Copies are not allowed inside a rendering pass, which is why uploads come first.
 
 #include <cstdint>
 #include <vulkan/vulkan.h>
@@ -58,9 +61,17 @@ struct ClearColor
 bool renderer_create(Renderer* renderer, const VulkanContext* context);
 void renderer_destroy(Renderer* renderer, const VulkanContext* context);
 
+// Waits for this frame slot, acquires a swapchain image, starts recording.
 RenderFrameResult renderer_begin_frame(Renderer* renderer, const VulkanContext* context,
-                                       const VulkanSwapchain* swapchain, ClearColor clear_color);
+                                       const VulkanSwapchain* swapchain);
+
+// Clears the swapchain image and starts the rendering pass.
+void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapchain, ClearColor clear_color);
 RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* context,
                                      const VulkanSwapchain* swapchain);
 
 VkCommandBuffer renderer_command_buffer(const Renderer* renderer);
+
+// Which FrameResources slot (0..FRAMES_IN_FLIGHT-1) is recording. Per-frame
+// resources elsewhere (e.g. staging buffers) are indexed with this.
+uint32_t renderer_frame_index(const Renderer* renderer);

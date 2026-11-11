@@ -3,6 +3,7 @@
 // Dear ImGui setup for a frontend's development/debug UI.
 // Thin wrapper over the official imgui SDL3 + Vulkan backends (deps/imgui/backends).
 
+#include <cstdint>
 #include <vulkan/vulkan.h>
 
 struct SDL_Window;
@@ -28,3 +29,13 @@ void debug_ui_end_frame_without_render();
 
 // Call after the swapchain was recreated (image count may have changed).
 void debug_ui_on_swapchain_recreated(const VulkanSwapchain* swapchain);
+
+// Textures shown with ImGui (e.g. a core's video). The id is ImGui's ImTextureID
+// (a VkDescriptorSet underneath), kept as uint64_t so this header needs no imgui.h.
+// The view must be in SHADER_READ_ONLY_OPTIMAL layout whenever ImGui draws it.
+uint64_t debug_ui_add_texture(VkImageView view);
+void     debug_ui_remove_texture(uint64_t texture_id);
+
+// ImGui::Image() with nearest-neighbour filtering (sharp pixels) instead of ImGui's
+// default linear. Call inside an ImGui window.
+void debug_ui_image_nearest(uint64_t texture_id, float width, float height, float uv_max_x, float uv_max_y);

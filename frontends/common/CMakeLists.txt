@@ -7,6 +7,8 @@ add_library(frontend_common STATIC
     vk_swapchain.cpp
     renderer.cpp
     debug_ui.cpp
+    vk_texture.cpp
+    app_shell.cpp
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -545,3 +545,26 @@ void vulkan_context_destroy(VulkanContext* context)
 
     context->physical_device = VK_NULL_HANDLE;
 }
+
+// ---------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------
+
+bool vulkan_find_memory_type(const VulkanContext* context, uint32_t type_bits, VkMemoryPropertyFlags properties,
+                             uint32_t* memory_type_index)
+{
+    VkPhysicalDeviceMemoryProperties memory = {};
+    vkGetPhysicalDeviceMemoryProperties(context->physical_device, &memory);
+
+    for (uint32_t i = 0; i < memory.memoryTypeCount; i++)
+    {
+        bool allowed = (type_bits & (1u << i)) != 0;
+        bool has_properties = (memory.memoryTypes[i].propertyFlags & properties) == properties;
+        if (allowed && has_properties)
+        {
+            *memory_type_index = i;
+            return true;
+        }
+    }
+    return false;
+}

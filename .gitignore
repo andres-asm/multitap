@@ -11,3 +11,6 @@ imgui.ini
 .vscode/
 .idea/
 *.user
+
+# Dear ImGui layout of the host-libretro test frontend
+libretro_test_frontend.ini

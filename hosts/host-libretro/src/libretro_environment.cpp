@@ -293,6 +293,15 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
             return EnvironmentResult::handled;
         }
 
+        // --- Input -----------------------------------------------------------
+
+        case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
+        {
+            // Specified with NULL data: returning true IS the answer
+            // ("RETRO_DEVICE_ID_JOYPAD_MASK works"). No data check on purpose.
+            return EnvironmentResult::handled;
+        }
+
         // --- Core options (not implemented yet) -----------------------------
 
         case RETRO_ENVIRONMENT_GET_VARIABLE:

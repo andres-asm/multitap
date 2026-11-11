@@ -7,12 +7,22 @@ add_library(host_libretro STATIC
     src/libretro_host.cpp
     src/libretro_environment.cpp
     src/libretro_environment_names.cpp
+    src/libretro_video.cpp
 )
 
 target_include_directories(host_libretro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(host_libretro PUBLIC host_common libretro_api)
 
 multitap_set_project_flags(host_libretro)
+
+# The test frontend bundled with host-libretro: an ImGui window to load and run
+# cores and check that every libretro function works. Not meant for playing.
+add_executable(libretro_test_frontend
+    frontend/main.cpp
+    frontend/fixed_input.cpp
+)
+target_link_libraries(libretro_test_frontend PRIVATE host_libretro frontend_common)
+multitap_set_project_flags(libretro_test_frontend)
 
 # Development tool: load a core (+ content), log environment calls, print info, unload.
 add_executable(libretro_core_info tools/core_info.cpp)
@@ -74,10 +84,24 @@ if(MULTITAP_BUILD_TESTS)
              COMMAND libretro_core_info "${CMAKE_CURRENT_BINARY_DIR}/no_such_core.so")
     set_tests_properties(host_libretro_missing_core_file PROPERTIES WILL_FAIL TRUE)
 
+    # Pixel format conversion (all three libretro formats -> XRGB8888 + alpha).
+    add_executable(host_libretro_video_test tests/video_conversion_test.cpp)
+    target_link_libraries(host_libretro_video_test PRIVATE host_libretro)
+    multitap_set_project_flags(host_libretro_video_test)
+    add_test(NAME host_libretro_video_conversion COMMAND host_libretro_video_test)
+
     # The interactive test wizard core lives in its own repo, pulled in as a
     # submodule. Built when present; it isn't run by CTest (it needs a frontend
     # that runs frames, and a human).
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test-libretro/CMakeLists.txt")
         add_subdirectory(test-libretro)
+
+        # Headless smoke test: 120 frames of the wizard (environment page) through the host.
+        # Checks retro_run, video copy/conversion and the input path under the sanitizers.
+        add_test(NAME host_libretro_wizard_runs
+                 COMMAND libretro_core_info --frames 120 $<TARGET_FILE:test_wizard_libretro>)
+        set_tests_properties(host_libretro_wizard_runs PROPERTIES
+            PASS_REGULAR_EXPRESSION "Ran 120 frames: 120 video frames \\(640x480\\)"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
     endif()
 endif()

@@ -1,6 +1,7 @@
 #include "debug_ui.h"
 
 #include <cstdlib>
+#include <cstring>
 
 #include <SDL3/SDL.h>
 
@@ -132,4 +133,43 @@ void debug_ui_end_frame_without_render()
 void debug_ui_on_swapchain_recreated(const VulkanSwapchain* swapchain)
 {
     ImGui_ImplVulkan_SetMinImageCount(swapchain->min_image_count);
+}
+
+// ---------------------------------------------------------------------------
+// Textures
+// ---------------------------------------------------------------------------
+
+// VkDescriptorSet is a pointer on 64-bit platforms and a uint64_t on 32-bit ones;
+// ImTextureID is always 64 bits. Copying the bytes works for both without casts.
+static_assert(sizeof(VkDescriptorSet) <= sizeof(ImTextureID), "ImTextureID must hold a VkDescriptorSet");
+
+uint64_t debug_ui_add_texture(VkImageView view)
+{
+    VkDescriptorSet descriptor_set = ImGui_ImplVulkan_AddTexture(view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ImTextureID texture_id = 0;
+    std::memcpy(&texture_id, &descriptor_set, sizeof(descriptor_set));
+    return texture_id;
+}
+
+void debug_ui_remove_texture(uint64_t texture_id)
+{
+    if (texture_id == 0)
+    {
+        return;
+    }
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+    std::memcpy(&descriptor_set, &texture_id, sizeof(descriptor_set));
+    ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+}
+
+void debug_ui_image_nearest(uint64_t texture_id, float width, float height, float uv_max_x, float uv_max_y)
+{
+    // Draw callbacks switch the backend's sampler for the draw commands between them.
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+
+    draw_list->AddCallback(platform_io.DrawCallback_SetSamplerNearest, nullptr);
+    ImGui::Image(ImTextureRef(static_cast<ImTextureID>(texture_id)), ImVec2(width, height), ImVec2(0.0f, 0.0f),
+                 ImVec2(uv_max_x, uv_max_y));
+    draw_list->AddCallback(platform_io.DrawCallback_SetSamplerLinear, nullptr);
 }
