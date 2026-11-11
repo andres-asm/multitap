@@ -1,0 +1,13 @@
+# Build output
+build*/
+out/
+.cache/
+compile_commands.json
+
+# Dear ImGui window layout, written at runtime
+imgui.ini
+
+# IDE
+.vscode/
+.idea/
+*.user
