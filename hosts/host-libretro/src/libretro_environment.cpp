@@ -488,7 +488,7 @@ bool libretro_environment_handle(LibretroHost* host, uint32_t command, void* dat
 
     // First call of each command: info. Repeats: debug, so per-frame calls
     // (GET_VARIABLE_UPDATE...) don't flood the log. Rejections: always a warning.
-    LogLevel level = previous_calls == 0 ? LogLevel::info : LogLevel::debug;
+    LogLevel level = previous_calls == 0 && !host->peeking ? LogLevel::info : LogLevel::debug;
     const char* outcome = "handled";
     if (result == EnvironmentResult::not_supported)
     {

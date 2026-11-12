@@ -29,6 +29,7 @@ static void print_usage()
                  "  --save DIR           directory returned for GET_SAVE_DIRECTORY (default: none)\n"
                  "  --options-version N  core options version to report: 2, 1 or 0 (default 2)\n"
                  "  --data-dir DIR       where the host keeps SRAM and savestates (default: none)\n"
+                 "  --peek               only ask the core about itself (no retro_init), print it, exit\n"
                  "  --load-state N       load savestate slot N before running frames\n"
                  "  --save-state N       save savestate slot N after running frames\n"
                  "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n");
@@ -66,6 +67,7 @@ int main(int argc, char** argv)
 {
     LibretroHostConfig config = {};
     const char* option_sets[MAX_OPTION_SETS] = {};
+    bool peek_only = false;
     long load_state_slot = -1;   // -1 = don't
     long save_state_slot = -1;
     int option_set_count = 0;
@@ -100,6 +102,10 @@ int main(int argc, char** argv)
         {
             i++;
             config.core_options_version = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+        }
+        else if (std::strcmp(argument, "--peek") == 0)
+        {
+            peek_only = true;
         }
         else if (std::strcmp(argument, "--load-state") == 0 && i + 1 < argc)
         {
@@ -146,6 +152,28 @@ int main(int argc, char** argv)
     {
         print_usage();
         return 2;
+    }
+
+    if (peek_only)
+    {
+        LibretroCoreInfo info = {};
+        if (!libretro_host_peek_core(core_path, &info))
+        {
+            host_log(LogLevel::error, "Peek: %s", info.error);
+            return 1;
+        }
+        host_log(LogLevel::info, "Peek: name \"%s\", version \"%s\"", info.name, info.version);
+        host_log(LogLevel::info, "Peek: extensions \"%s\", need_fullpath %s, block_extract %s, no game %s",
+                 info.extensions, info.need_fullpath ? "yes" : "no", info.block_extract ? "yes" : "no",
+                 info.supports_no_game ? "yes" : "no");
+        host_log(LogLevel::info, "Peek: %u core options (API v%u), libretro API %u", info.option_count,
+                 info.options_api, info.api_version);
+        if (content_path != nullptr)
+        {
+            host_log(LogLevel::info, "Peek: %s %s", libretro_core_info_accepts(&info, content_path) ? "accepts" : "does NOT accept",
+                     content_path);
+        }
+        return 0;
     }
 
     // LibretroHost holds a few path buffers (~16 KB); keep it off the stack.

@@ -555,6 +555,131 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
     return true;
 }
 
+static void copy_text(char* destination, size_t size, const char* source)
+{
+    std::snprintf(destination, size, "%s", source != nullptr ? source : "");
+}
+
+bool libretro_host_peek_core(const char* core_path, LibretroCoreInfo* info)
+{
+    *info = LibretroCoreInfo{};
+
+    // A full LibretroHost is ~20 KB of path buffers: keep it off the stack.
+    LibretroHost* host = new LibretroHost{};
+    host->peeking = true;
+    host->core_options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;   // so cores declare their newest options
+    if (!copy_path(host->core_path, sizeof(host->core_path), core_path, "Core"))
+    {
+        copy_text(info->error, sizeof(info->error), "path too long");
+        delete host;
+        return false;
+    }
+    if (!libretro_core_load(&host->core, host->core_path))
+    {
+        copy_text(info->error, sizeof(info->error), "not a usable libretro core (can't load it, or a retro_* symbol is missing)");
+        delete host;
+        return false;
+    }
+
+    host_enter(host);
+    info->api_version = host->core.retro_api_version();
+    if (info->api_version != RETRO_API_VERSION)
+    {
+        host_leave(host);
+        std::snprintf(info->error, sizeof(info->error), "libretro API version %u, we support %u", info->api_version,
+                      RETRO_API_VERSION);
+        libretro_host_unload_core(host);
+        delete host;
+        return false;
+    }
+    host->core.retro_set_environment(environment_callback);
+    retro_system_info system = {};
+    host->core.retro_get_system_info(&system);
+    host_leave(host);
+
+    // Copy now: these strings belong to the core and go away when it's unloaded.
+    copy_text(info->name, sizeof(info->name), system.library_name);
+    copy_text(info->version, sizeof(info->version), system.library_version);
+    copy_text(info->extensions, sizeof(info->extensions), system.valid_extensions);
+    info->need_fullpath = system.need_fullpath;
+    info->block_extract = system.block_extract;
+    info->supports_no_game = host->supports_no_game;
+    info->option_count = host->options.count;
+    info->options_api = host->options.api_used;
+    info->usable = true;
+
+    // retro_init never ran, so this only frees the options and closes the library.
+    libretro_host_unload_core(host);
+    delete host;
+    return true;
+}
+
+// Case-insensitive ASCII comparison of `length` characters.
+static bool same_text_ignoring_case(const char* a, const char* b, size_t length)
+{
+    for (size_t i = 0; i < length; i++)
+    {
+        char x = a[i];
+        char y = b[i];
+        x = (x >= 'A' && x <= 'Z') ? static_cast<char>(x - 'A' + 'a') : x;
+        y = (y >= 'A' && y <= 'Z') ? static_cast<char>(y - 'A' + 'a') : y;
+        if (x != y)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool libretro_core_info_accepts(const LibretroCoreInfo* info, const char* content_path)
+{
+    if (!info->usable)
+    {
+        return false;
+    }
+    if (content_path == nullptr || content_path[0] == '\0')
+    {
+        return info->supports_no_game;
+    }
+    if (info->extensions[0] == '\0')
+    {
+        return true;   // the core didn't say: let it try
+    }
+
+    // The extension of the file name, not of a directory ("dir.v2/game").
+    const char* dot = std::strrchr(content_path, '.');
+    const char* slash = std::strrchr(content_path, '/');
+    const char* backslash = std::strrchr(content_path, '\\');
+    if (backslash != nullptr && (slash == nullptr || backslash > slash))
+    {
+        slash = backslash;
+    }
+    if (dot == nullptr || (slash != nullptr && dot < slash))
+    {
+        return false;
+    }
+    const char* extension = dot + 1;
+    size_t extension_length = std::strlen(extension);
+
+    // Walk "sfc|smc|swc": compare each entry with the content's extension.
+    const char* entry = info->extensions;
+    while (*entry != '\0')
+    {
+        const char* bar = std::strchr(entry, '|');
+        size_t entry_length = bar != nullptr ? static_cast<size_t>(bar - entry) : std::strlen(entry);
+        if (entry_length == extension_length && same_text_ignoring_case(entry, extension, entry_length))
+        {
+            return true;
+        }
+        if (bar == nullptr)
+        {
+            break;
+        }
+        entry = bar + 1;
+    }
+    return false;
+}
+
 void libretro_host_unload_core(LibretroHost* host)
 {
     libretro_host_unload_game(host);
@@ -569,7 +694,7 @@ void libretro_host_unload_core(LibretroHost* host)
 
     if (host->core.library.handle != nullptr)
     {
-        host_log(LogLevel::info, "Unloading core %s", host->core_path);
+        host_log(host->peeking ? LogLevel::debug : LogLevel::info, "Unloading core %s", host->core_path);
         libretro_core_unload(&host->core);
     }
 

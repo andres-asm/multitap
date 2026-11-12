@@ -57,6 +57,27 @@ struct LibretroInputState
     uint8_t  keys[LIBRETRO_KEY_COUNT] = {};
 };
 
+// What a core says about itself before it is started (libretro_host_peek_core).
+// The canonical source: the core's own answers, not an info file.
+constexpr size_t LIBRETRO_INFO_TEXT_MAX = 256;
+constexpr size_t LIBRETRO_EXTENSIONS_MAX = 1024;
+
+struct LibretroCoreInfo
+{
+    bool     usable = false;                          // false: see `error`
+    char     error[LIBRETRO_INFO_TEXT_MAX] = {};
+
+    char     name[LIBRETRO_INFO_TEXT_MAX]    = {};    // retro_system_info.library_name
+    char     version[LIBRETRO_INFO_TEXT_MAX] = {};    // library_version
+    char     extensions[LIBRETRO_EXTENSIONS_MAX] = {}; // valid_extensions as reported ("sfc|smc|..."), may be empty
+    bool     need_fullpath    = false;
+    bool     block_extract    = false;
+    bool     supports_no_game = false;                // SET_SUPPORT_NO_GAME during retro_set_environment
+    uint32_t option_count     = 0;                    // core options declared during retro_set_environment
+    uint32_t options_api      = 0;                    // 2, 1, 0 (SET_VARIABLES), if option_count > 0
+    unsigned api_version      = 0;                    // retro_api_version()
+};
+
 // Counters for debug UIs and tests.
 struct LibretroHostStats
 {
@@ -132,6 +153,7 @@ struct LibretroHost
     retro_pixel_format pixel_format       = RETRO_PIXEL_FORMAT_0RGB1555;   // libretro's default
     bool               supports_no_game   = false;
     bool               shutdown_requested = false;
+    bool               peeking            = false;   // libretro_host_peek_core: environment calls logged at debug level only
     unsigned           performance_level  = 0;
 
     // Environment statistics (for logging and the debug UI later).
@@ -182,6 +204,20 @@ bool libretro_host_run_frame(LibretroHost* host);
 // Both are safe to call when nothing is loaded.
 void libretro_host_unload_game(LibretroHost* host);
 void libretro_host_unload_core(LibretroHost* host);
+
+// Loads the core only far enough to ask it about itself: retro_set_environment
+// (catches SET_SUPPORT_NO_GAME, core options, ...) and retro_get_system_info,
+// never retro_init, then unloads it. Same approach as RetroArch's system info
+// probe. Returns false if the file isn't a usable core (info->error says why).
+// Uses its own temporary host, so other cores can keep running, but never peek
+// the core that is running in another host: it's the same loaded library, and
+// its retro_set_environment would run a second time on the live core.
+bool libretro_host_peek_core(const char* core_path, LibretroCoreInfo* info);
+
+// True if a core with this info can start `content_path`: its extension is in
+// the core's list (case-insensitive; an empty list accepts anything), or, for
+// no content (nullptr or ""), if the core supports running without content.
+bool libretro_core_info_accepts(const LibretroCoreInfo* info, const char* content_path);
 
 // The instance the core is currently running in, or nullptr outside core calls.
 LibretroHost* libretro_host_current();

@@ -21,6 +21,7 @@
 #include "app_shell.h"
 #include "audio_output.h"
 #include "debug_ui.h"
+#include "core_catalog.h"
 #include "fixed_input.h"
 #include "frame_timing.h"
 #include "host_fs.h"
@@ -41,8 +42,6 @@ struct ImageArea
     bool  hovered = false;
     bool  held    = false;   // left mouse button held down on the image
 };
-
-constexpr int MAX_CORE_FILES = 128;
 
 struct App
 {
@@ -69,10 +68,9 @@ struct App
     char data_directory[LIBRETRO_PATH_MAX] = {};
     uint32_t state_slot = 0;   // savestate slot for Save/Load (F2/F4), changed with F6/F7
 
-    // Cores offered in the Core list: every core file in <data>/cores.
-    char cores_directory[LIBRETRO_PATH_MAX] = {};
-    char core_files[MAX_CORE_FILES][256]   = {};   // file names, sorted
-    int  core_file_count                   = 0;
+    // Cores offered in the Core list: every core in <data>/cores, with what
+    // each says about itself (peeked once, cached in <data>/core_info_cache.cfg).
+    CoreCatalog catalog = {};
 
     AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
 
@@ -168,35 +166,6 @@ static bool looks_like_core(const char* path)
     return ends_with(path, ".so") || ends_with(path, ".dll") || ends_with(path, ".dylib");
 }
 
-// qsort comparator for the core list: plain alphabetical order.
-static int compare_core_names(const void* a, const void* b)
-{
-    return std::strcmp(static_cast<const char*>(a), static_cast<const char*>(b));
-}
-
-// Re-reads the cores folder (cheap: a directory listing). Called when the
-// list opens, so cores copied there while running show up.
-static void scan_core_files(App* app)
-{
-    app->core_file_count = 0;
-    int count = 0;
-    char** names = SDL_GlobDirectory(app->cores_directory, "*", 0, &count);
-    if (names == nullptr)
-    {
-        return;
-    }
-    for (int i = 0; i < count && app->core_file_count < MAX_CORE_FILES; i++)
-    {
-        if (looks_like_core(names[i]) && std::strlen(names[i]) < sizeof(app->core_files[0]))
-        {
-            copy_path(app->core_files[app->core_file_count], sizeof(app->core_files[0]), names[i]);
-            app->core_file_count++;
-        }
-    }
-    SDL_free(names);
-    std::qsort(app->core_files, static_cast<size_t>(app->core_file_count), sizeof(app->core_files[0]), compare_core_names);
-}
-
 // The file name part of a path, for showing a core in the list.
 static const char* file_name_of(const char* path)
 {
@@ -211,38 +180,100 @@ static const char* file_name_of(const char* path)
     return name;
 }
 
+// The catalog entry for the core in the Core field, or nullptr.
+static const CoreCatalogEntry* selected_catalog_entry(const App* app)
+{
+    const char* file = file_name_of(app->core_path);
+    for (int32_t i = 0; i < app->catalog.count; i++)
+    {
+        if (std::strcmp(app->catalog.entries[i].file_name, file) == 0)
+        {
+            return &app->catalog.entries[i];
+        }
+    }
+    return nullptr;
+}
+
+static void catalog_entry_tooltip(const CoreCatalogEntry* entry)
+{
+    const LibretroCoreInfo* info = &entry->info;
+    if (!info->usable)
+    {
+        ImGui::SetItemTooltip("%s\nNot usable: %s", entry->file_name, info->error);
+        return;
+    }
+    ImGui::SetItemTooltip("%s\nExtensions: %s\nRuns without content: %s\nNeeds a path (need_fullpath): %s\n"
+                          "Core options: %u (API v%u)",
+                          entry->file_name, info->extensions[0] != '\0' ? info->extensions : "(any)",
+                          info->supports_no_game ? "yes" : "no", info->need_fullpath ? "yes" : "no",
+                          info->option_count, info->options_api);
+}
+
 static void draw_core_list(App* app)
 {
-    const char* preview = app->core_path[0] != '\0' ? file_name_of(app->core_path) : "choose a core";
+    const CoreCatalogEntry* selected = selected_catalog_entry(app);
+    char preview[LIBRETRO_INFO_TEXT_MAX * 2 + 8] = {};
+    if (selected != nullptr && selected->info.usable)
+    {
+        std::snprintf(preview, sizeof(preview), "%s %s", selected->info.name, selected->info.version);
+    }
+    else
+    {
+        std::snprintf(preview, sizeof(preview), "%s", app->core_path[0] != '\0' ? file_name_of(app->core_path) : "choose a core");
+    }
+
     if (ImGui::BeginCombo("Core", preview))
     {
+        // Rescan on every open (cheap: cached cores are only stat'ed), so cores
+        // copied into the folder show up. The running core is never peeked.
         if (ImGui::IsWindowAppearing())
         {
-            scan_core_files(app);
+            core_catalog_scan(&app->catalog, app->host->core.library.handle != nullptr ? app->host : nullptr);
         }
-        for (int i = 0; i < app->core_file_count; i++)
+        for (int32_t i = 0; i < app->catalog.count; i++)
         {
-            bool selected = std::strcmp(file_name_of(app->core_path), app->core_files[i]) == 0;
-            if (ImGui::Selectable(app->core_files[i], selected))
+            const CoreCatalogEntry* entry = &app->catalog.entries[i];
+            char label[LIBRETRO_INFO_TEXT_MAX * 2 + 280] = {};
+            if (entry->info.usable)
             {
-                int written = std::snprintf(app->core_path, sizeof(app->core_path), "%s/%s", app->cores_directory,
-                                            app->core_files[i]);
-                if (written < 0 || static_cast<size_t>(written) >= sizeof(app->core_path))
+                std::snprintf(label, sizeof(label), "%s %s##%s", entry->info.name, entry->info.version, entry->file_name);
+            }
+            else
+            {
+                std::snprintf(label, sizeof(label), "%s (not usable)##%s", entry->file_name, entry->file_name);
+            }
+
+            // Greyed out (still selectable) when it can't take what's in the Content field.
+            bool fits = libretro_core_info_accepts(&entry->info, app->content_path);
+            if (!fits)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            }
+            ImGuiSelectableFlags flags = entry->info.usable ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled;
+            if (ImGui::Selectable(label, entry == selected, flags))
+            {
+                if (!core_catalog_path(&app->catalog, entry, app->core_path, sizeof(app->core_path)))
                 {
                     app->core_path[0] = '\0';
                     set_status(app, "Core path too long");
                 }
             }
+            if (!fits)
+            {
+                ImGui::PopStyleColor();
+            }
+            catalog_entry_tooltip(entry);
         }
-        if (app->core_file_count == 0)
+        if (app->catalog.count == 0)
         {
-            ImGui::TextDisabled("No cores in %s", app->cores_directory);
+            ImGui::TextDisabled("No cores in %s", app->catalog.directory);
         }
         ImGui::EndCombo();
     }
-    ImGui::SetItemTooltip("Cores in %s (rescanned when opened). Drop a core onto the window or pass it on the "
-                          "command line to use one from elsewhere.\n%s",
-                          app->cores_directory, app->core_path[0] != '\0' ? app->core_path : "");
+    ImGui::SetItemTooltip("Cores in %s, greyed out when they can't load what's in Content (or need content when it's "
+                          "empty). Drop a core onto the window or pass it on the command line to use one from "
+                          "elsewhere.\n%s",
+                          app->catalog.directory, app->core_path[0] != '\0' ? app->core_path : "");
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,15 +1199,16 @@ int main(int argc, char** argv)
 
         // Decided for now: per-game host data (SRAM, savestates) under ~/.host-libretro.
         resolve_user_path("~/.host-libretro", app->data_directory, sizeof(app->data_directory));
-        int written = std::snprintf(app->cores_directory, sizeof(app->cores_directory), "%s/cores", app->data_directory);
-        if (written > 0 && static_cast<size_t>(written) < sizeof(app->cores_directory))
+        char cores_directory[LIBRETRO_PATH_MAX] = {};
+        char cache_path[LIBRETRO_PATH_MAX] = {};
+        int cores_written = std::snprintf(cores_directory, sizeof(cores_directory), "%s/cores", app->data_directory);
+        int cache_written = std::snprintf(cache_path, sizeof(cache_path), "%s/core_info_cache.cfg", app->data_directory);
+        if (cores_written > 0 && static_cast<size_t>(cores_written) < sizeof(cores_directory) && cache_written > 0 &&
+            static_cast<size_t>(cache_written) < sizeof(cache_path))
         {
-            SDL_CreateDirectory(app->cores_directory);   // so it's there to copy cores into
-            scan_core_files(app);
-        }
-        else
-        {
-            app->cores_directory[0] = '\0';
+            SDL_CreateDirectory(cores_directory);   // so it's there to copy cores into
+            core_catalog_init(&app->catalog, cores_directory, cache_path);
+            core_catalog_scan(&app->catalog, nullptr);
         }
 
         set_status(app, "Choose a core (list, command line, or drag and drop)");

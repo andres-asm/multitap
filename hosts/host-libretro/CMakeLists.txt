@@ -24,6 +24,7 @@ add_executable(libretro_test_frontend
     frontend/fixed_input.cpp
     frontend/keyboard_input.cpp
     frontend/frame_timing.cpp
+    frontend/core_catalog.cpp
 )
 target_link_libraries(libretro_test_frontend PRIVATE host_libretro frontend_common)
 multitap_set_project_flags(libretro_test_frontend)
@@ -89,6 +90,23 @@ if(MULTITAP_BUILD_TESTS)
     add_test(NAME host_libretro_missing_core_file
              COMMAND libretro_core_info "${CMAKE_CURRENT_BINARY_DIR}/no_such_core.so")
     set_tests_properties(host_libretro_missing_core_file PROPERTIES WILL_FAIL TRUE)
+
+    # Peeking: what a core says about itself without retro_init.
+    add_test(NAME host_libretro_peek_test_core
+             COMMAND libretro_core_info --peek $<TARGET_FILE:test_core> "some/dir.v2/GAME.BIN")
+    set_tests_properties(host_libretro_peek_test_core PROPERTIES
+        PASS_REGULAR_EXPRESSION "name \"multitap test core\".*extensions \"bin\\|txt\".*no game yes.*1 core options \\(API v0\\).*Peek: accepts some/dir\\.v2/GAME\\.BIN"
+        FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|retro_init")
+
+    add_test(NAME host_libretro_peek_wrong_extension
+             COMMAND libretro_core_info --peek $<TARGET_FILE:test_core> "game.sfc")
+    set_tests_properties(host_libretro_peek_wrong_extension PROPERTIES
+        PASS_REGULAR_EXPRESSION "Peek: does NOT accept game\\.sfc")
+
+    add_test(NAME host_libretro_peek_missing_symbol
+             COMMAND libretro_core_info --peek $<TARGET_FILE:test_core_missing_symbol>)
+    set_tests_properties(host_libretro_peek_missing_symbol PROPERTIES
+        PASS_REGULAR_EXPRESSION "Peek: not a usable libretro core")
 
     # Pixel format conversion (all three libretro formats -> XRGB8888 + alpha).
     add_executable(host_libretro_video_test tests/video_conversion_test.cpp)
@@ -207,6 +225,12 @@ if(MULTITAP_BUILD_TESTS)
         set_tests_properties(host_libretro_test_libretro_av_info PROPERTIES
             PASS_REGULAR_EXPRESSION "SET_SYSTEM_AV_INFO +\\( *32\\) handled +640x720 @ 30\\.000 fps.*Ran 10 frames: 10 video frames \\(640x720\\), 0 duplicates, 0 video errors, 16000 audio frames"
             FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
+
+        add_test(NAME host_libretro_peek_test_libretro
+                 COMMAND libretro_core_info --peek $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_peek_test_libretro PROPERTIES
+            PASS_REGULAR_EXPRESSION "name \"libretro test\".*no game yes.*4 core options \\(API v2\\)"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|\\] init")
 
         # A value that isn't one of the option's values must be refused.
         add_test(NAME host_libretro_option_bad_value
