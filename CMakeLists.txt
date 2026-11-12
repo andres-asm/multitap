@@ -10,18 +10,44 @@ option(MULTITAP_WARNINGS_AS_ERRORS "Treat warnings in our own code as errors"   
 option(MULTITAP_SANITIZE           "Build our own code with ASan + UBSan"         OFF)
 option(MULTITAP_BUILD_TESTS        "Build test cores and register CTest tests"    ON)
 
-# Where the libretro test core is copied after every build, so the test
-# frontend's core list (and other frontends) find it next to any other cores
-# dropped there. Not for sanitizer builds: an ASan-built core can't be loaded
-# by a normal frontend. Empty = don't copy.
+# Where builds are copied so they're easy to find and run:
+#   MULTITAP_BIN_DIR    the programs (test frontend, core info tool, piccolo)
+#   MULTITAP_CORES_DIR  the libretro test core, next to any other cores dropped
+#                       there (the test frontend lists that folder)
+# Only from normal builds: sanitizer builds need the ASan runtime (an ASan core
+# can't be loaded by a normal frontend), so they keep everything in the build
+# folder. Empty = don't copy.
 if(MULTITAP_SANITIZE)
-    set(_cores_dir_default "")
+    set(_data_dir_default "")
 elseif(WIN32)
-    set(_cores_dir_default "$ENV{USERPROFILE}/.host-libretro/cores")
+    set(_data_dir_default "$ENV{USERPROFILE}/.host-libretro")
 else()
-    set(_cores_dir_default "$ENV{HOME}/.host-libretro/cores")
+    set(_data_dir_default "$ENV{HOME}/.host-libretro")
 endif()
+if(_data_dir_default)
+    set(_cores_dir_default "${_data_dir_default}/cores")
+else()
+    set(_cores_dir_default "")
+endif()
+set(MULTITAP_BIN_DIR "${_data_dir_default}" CACHE PATH "Copy programs here after building (empty = don't)")
 set(MULTITAP_CORES_DIR "${_cores_dir_default}" CACHE PATH "Copy test cores here after building (empty = don't)")
+
+# Copies `target`'s file into `directory` after every build. Written to a
+# temporary name first, then renamed over the old one: a program or core that
+# is running keeps its old copy (overwriting a running executable fails, and
+# overwriting a loaded .so in place can crash the program using it).
+function(multitap_copy_after_build target directory)
+    if(NOT directory)
+        return()
+    endif()
+    add_custom_target(copy_${target} ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${directory}"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${target}> "${directory}/$<TARGET_FILE_NAME:${target}>.new"
+        COMMAND ${CMAKE_COMMAND} -E rename "${directory}/$<TARGET_FILE_NAME:${target}>.new" "${directory}/$<TARGET_FILE_NAME:${target}>"
+        DEPENDS ${target}
+        COMMENT "Copying ${target} to ${directory}"
+        VERBATIM)
+endfunction()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)

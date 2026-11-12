@@ -20,6 +20,7 @@ add_executable(piccolo
 target_link_libraries(piccolo PRIVATE frontend_common piccolo_font)
 
 multitap_set_project_flags(piccolo)
+multitap_copy_after_build(piccolo "${MULTITAP_BIN_DIR}")
 
 # Development tool: writes a PNG of every glyph + sample text, to judge the font by eye.
 add_executable(pixel_font_preview tools/pixel_font_preview.cpp)

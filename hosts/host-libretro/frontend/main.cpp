@@ -245,6 +245,80 @@ static void draw_core_list(App* app)
                           app->cores_directory, app->core_path[0] != '\0' ? app->core_path : "");
 }
 
+// ---------------------------------------------------------------------------
+// Last used core and content (<data>/libretro_test_frontend.cfg)
+// ---------------------------------------------------------------------------
+//
+// Two "key=value" lines, written when a core starts, read at startup unless a
+// core is given on the command line. The fields are filled in; nothing starts
+// on its own. Paths are stored as typed (e.g. with "~").
+
+static bool last_used_file(const App* app, char* out, size_t out_size)
+{
+    int written = std::snprintf(out, out_size, "%s/libretro_test_frontend.cfg", app->data_directory);
+    return app->data_directory[0] != '\0' && written > 0 && static_cast<size_t>(written) < out_size;
+}
+
+static void save_last_used(const App* app)
+{
+    char path[LIBRETRO_PATH_MAX] = {};
+    char text[LIBRETRO_PATH_MAX * 2 + 32] = {};
+    if (!last_used_file(app, path, sizeof(path)))
+    {
+        return;
+    }
+    int length = std::snprintf(text, sizeof(text), "core=%s\ncontent=%s\n", app->core_path, app->content_path);
+    if (length > 0 && static_cast<size_t>(length) < sizeof(text))
+    {
+        host_fs_write_file(path, text, static_cast<size_t>(length));
+    }
+}
+
+// Copies the rest of the line after `key` (e.g. "core=") into `out`, if the line starts with it.
+static void read_setting(const char* line, size_t line_length, const char* key, char* out, size_t out_size)
+{
+    size_t key_length = std::strlen(key);
+    if (line_length < key_length || std::strncmp(line, key, key_length) != 0)
+    {
+        return;
+    }
+    size_t value_length = line_length - key_length;
+    if (value_length < out_size)
+    {
+        std::memcpy(out, line + key_length, value_length);
+        out[value_length] = '\0';
+    }
+}
+
+static void load_last_used(App* app)
+{
+    char path[LIBRETRO_PATH_MAX] = {};
+    if (!last_used_file(app, path, sizeof(path)) || !host_fs_exists(path))
+    {
+        return;
+    }
+    uint8_t* data = nullptr;
+    size_t size = 0;
+    if (!host_fs_read_file(path, &data, &size))
+    {
+        return;
+    }
+    const char* text = static_cast<const char*>(static_cast<const void*>(data));
+    size_t start = 0;
+    while (start < size)
+    {
+        size_t end = start;
+        while (end < size && text[end] != '\n')
+        {
+            end++;
+        }
+        read_setting(text + start, end - start, "core=", app->core_path, sizeof(app->core_path));
+        read_setting(text + start, end - start, "content=", app->content_path, sizeof(app->content_path));
+        start = end + 1;
+    }
+    delete[] data;
+}
+
 static bool core_running(const App* app)
 {
     return app->host->game_loaded;
@@ -377,6 +451,7 @@ static void core_start(App* app)
     audio_output_create(&app->audio, app->host->av_info.timing.sample_rate);
 
     set_status(app, "Running %s", app->host->system_info.library_name != nullptr ? app->host->system_info.library_name : "core");
+    save_last_used(app);   // so the next start has these filled in
 }
 
 // Maps the mouse onto the core's image as a libretro pointer (-0x7fff..0x7fff).
@@ -1104,7 +1179,15 @@ int main(int argc, char** argv)
             app->cores_directory[0] = '\0';
         }
 
-        set_status(app, "Choose a core (path, command line, or drag and drop)");
+        set_status(app, "Choose a core (list, command line, or drag and drop)");
+        if (argc <= 1)
+        {
+            load_last_used(app);
+            if (app->core_path[0] != '\0')
+            {
+                set_status(app, "Last used core and content filled in: press Start");
+            }
+        }
         if (argc > 1)
         {
             copy_path(app->core_path, sizeof(app->core_path), argv[1]);
