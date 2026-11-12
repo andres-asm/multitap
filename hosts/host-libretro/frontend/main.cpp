@@ -257,8 +257,8 @@ static void draw_core_list(App* app)
                           "empty). Drop a core onto the window or pass it on the command line to use one from "
                           "elsewhere.\n%s",
                           app->catalog.directory, app->core_path[0] != '\0' ? app->core_path : "");
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh core info"))
+    // Full width, on its own line under the list.
+    if (ImGui::Button("Refresh core info", ImVec2(-FLT_MIN, 0.0f)))
     {
         core_catalog_refresh(&app->catalog, app->session.host->core.library.handle != nullptr ? app->session.host : nullptr);
         set_status(app, "Core info refreshed: %d cores, %d peeked", app->catalog.count, app->catalog.peeked_last_scan);
