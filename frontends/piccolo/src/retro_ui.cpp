@@ -301,3 +301,30 @@ void retro_ui_game_picture(uint64_t texture_id, float uv_max_x, float uv_max_y, 
                         ImVec2(position.x + width, position.y + height), ImVec2(0.0f, 0.0f), ImVec2(uv_max_x, uv_max_y));
     draw_list->AddCallback(ImGui::GetPlatformIO().DrawCallback_SetSamplerLinear, nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// Combo with the font's arrow
+// ---------------------------------------------------------------------------
+
+bool retro_ui_begin_combo(const char* label, const char* preview)
+{
+    // Where the combo's frame goes, worked out before BeginCombo: when it
+    // opens, the current window becomes the popup and the item rect is gone.
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 position = ImGui::GetCursorScreenPos();
+    float width = ImGui::CalcItemWidth();
+    float height = ImGui::GetFrameHeight();
+
+    bool open = ImGui::BeginCombo(label, preview, ImGuiComboFlags_NoArrowButton);
+
+    // A square at the right end, button-colored, with the arrow glyph centered.
+    ImVec2 square_min(position.x + width - height, position.y);
+    ImVec2 square_max(position.x + width, position.y + height);
+    draw_list->AddRectFilled(square_min, square_max, to_imgui_u32(open ? HIGHLIGHT_FACE : BAR_FACE));
+    ImVec2 arrow = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, PIXEL_FONT_UTF8_ARROW_DOWN);
+    ImVec2 arrow_position(static_cast<float>(static_cast<int32_t>(square_min.x + (height - arrow.x) * 0.5f)),
+                          static_cast<float>(static_cast<int32_t>(square_min.y + (height - arrow.y) * 0.5f)));
+    draw_list->AddText(ImGui::GetFont(), ImGui::GetFontSize(), arrow_position, to_imgui_u32(TEXT_NORMAL),
+                       PIXEL_FONT_UTF8_ARROW_DOWN);
+    return open;
+}

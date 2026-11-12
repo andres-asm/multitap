@@ -13,5 +13,11 @@ struct ImFont;
 
 constexpr float PIXEL_FONT_IMGUI_UNIT = 7.0f;   // font size at 1x (= PIXEL_FONT_LINE_HEIGHT)
 
+// UTF-8 for the Unicode arrows the font draws with its own arrow glyphs.
+#define PIXEL_FONT_UTF8_ARROW_UP    "\xE2\x96\xB2"   // U+25B2
+#define PIXEL_FONT_UTF8_ARROW_DOWN  "\xE2\x96\xBC"   // U+25BC
+#define PIXEL_FONT_UTF8_ARROW_LEFT  "\xE2\x97\x80"   // U+25C0
+#define PIXEL_FONT_UTF8_ARROW_RIGHT "\xE2\x96\xB6"   // U+25B6
+
 // Adds the font to ImGui's atlas. Returns nullptr (and logs) on failure.
 ImFont* pixel_font_imgui_add();

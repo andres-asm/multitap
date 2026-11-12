@@ -214,7 +214,7 @@ bool file_picker_draw(FilePicker* picker, const CoreCatalog* catalog, ImFont* pi
         ImGui::TextUnformatted("CORE");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##core", preview))
+        if (retro_ui_begin_combo("##core", preview))
         {
             for (int32_t i = 0; i < catalog->count; i++)
             {

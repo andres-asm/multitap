@@ -17,11 +17,32 @@ static int32_t block_size(float font_size)
     return size < 1 ? 1 : size;
 }
 
+// The Unicode arrows ImGui text can use, drawn with our own arrow glyphs.
+struct ArrowCodepoint
+{
+    ImWchar unicode;
+    char    glyph;
+};
+
+static const ArrowCodepoint ARROWS[] = {
+    { 0x25B2, PIXEL_FONT_ARROW_UP },      // BLACK UP-POINTING TRIANGLE
+    { 0x25BC, PIXEL_FONT_ARROW_DOWN },    // BLACK DOWN-POINTING TRIANGLE
+    { 0x25C0, PIXEL_FONT_ARROW_LEFT },    // BLACK LEFT-POINTING TRIANGLE
+    { 0x25B6, PIXEL_FONT_ARROW_RIGHT },   // BLACK RIGHT-POINTING TRIANGLE
+};
+
 // ImGui reserves glyph index 0 for "not found", so index = character + 1.
 static int loader_glyph_index(ImFontAtlas* atlas, ImFontConfig* src, ImWchar codepoint)
 {
     (void)atlas;
     (void)src;
+    for (size_t i = 0; i < sizeof(ARROWS) / sizeof(ARROWS[0]); i++)
+    {
+        if (ARROWS[i].unicode == codepoint)
+        {
+            return static_cast<int>(static_cast<unsigned char>(ARROWS[i].glyph)) + 1;
+        }
+    }
     if (codepoint >= 256)
     {
         return 0;

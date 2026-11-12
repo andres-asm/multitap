@@ -34,6 +34,10 @@ void retro_ui_pop_theme();
 void retro_ui_begin_window(int32_t scale);
 void retro_ui_end_window();
 
+// ImGui::BeginCombo with the pixel font's down arrow instead of ImGui's own
+// triangle. Same return value and EndCombo() rule. Use inside the theme.
+bool retro_ui_begin_combo(const char* label, const char* preview);
+
 // The core's picture filling the window behind everything, at `aspect`
 // (width / height), centered, with sharp pixels. uv_max = the used part of the texture.
 void retro_ui_game_picture(uint64_t texture_id, float uv_max_x, float uv_max_y, float aspect);
