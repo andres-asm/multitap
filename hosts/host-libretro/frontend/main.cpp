@@ -21,6 +21,7 @@
 #include "audio_output.h"
 #include "debug_ui.h"
 #include "fixed_input.h"
+#include "frame_timing.h"
 #include "host_fs.h"
 #include "keyboard_input.h"
 #include "libretro_host.h"
@@ -75,6 +76,8 @@ struct App
     // base size or aspect changes (load, SET_GEOMETRY, SET_SYSTEM_AV_INFO), the
     // window is resized once; the user may resize it freely in between.
     retro_game_geometry video_window_geometry = {};
+
+    FrameTiming timing = {};   // Vsync / Exact (frame_timing.h)
 };
 
 // ---------------------------------------------------------------------------
@@ -461,6 +464,51 @@ static void draw_savestate_section(App* app)
     ImGui::EndDisabled();
 }
 
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
+// Once per loop: effective timing mode from the user's choice, the core's fps
+// and the display; vsync on/off and the audio speed follow it.
+static void update_timing(App* app)
+{
+    bool running = core_running(app);
+    frame_timing_update(&app->timing, running, running ? app->host->av_info.timing.fps : 0.0,
+                        app_shell_display_refresh_hz(&app->shell));
+    bool vsync = app->timing.effective == TimingMode::vsync;
+    if (!app_shell_set_vsync(&app->shell, vsync))
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not switch vsync %s", vsync ? "on" : "off");
+    }
+    audio_output_set_speed(&app->audio, frame_timing_audio_ratio(&app->timing), vsync);
+}
+
+static void draw_timing_section(App* app)
+{
+    static const char* const MODE_NAMES[] = { "Vsync", "Exact" };
+    int mode = app->timing.mode == TimingMode::vsync ? 0 : 1;
+    if (ImGui::Combo("Timing", &mode, MODE_NAMES, 2))
+    {
+        app->timing.mode = mode == 0 ? TimingMode::vsync : TimingMode::exact;
+    }
+    ImGui::SetItemTooltip("Vsync: one core frame per display refresh, audio speed matched + DRC (falls back to "
+                          "Exact when the core's fps is more than 1%% from the display's).\n"
+                          "Exact: vsync off, frames paced by a timer at exactly the core's fps.");
+
+    if (!core_running(app))
+    {
+        return;
+    }
+    ImGui::Text("In use: %s%s  (core %.3f fps, display %.2f Hz, %s)", frame_timing_mode_name(app->timing.effective),
+                app->timing.fell_back ? " (Vsync not possible)" : "", app->timing.core_fps, app->timing.display_hz,
+                vk_present_mode_to_string(app->shell.swapchain.present_mode));
+    if (app->audio.stream != nullptr)
+    {
+        ImGui::Text("Audio speed: x%.5f%s", app->audio.current_ratio,
+                    app->audio.rate_control ? " (matched to the display + DRC)" : "");
+    }
+}
+
 static void draw_controls_window(App* app)
 {
     const ImGuiIO& io = ImGui::GetIO();
@@ -496,6 +544,7 @@ static void draw_controls_window(App* app)
     }
     ImGui::SetItemTooltip("Which core options version we report to the core. Lower versions make it use its "
                           "older options code. Changing it unloads the core.");
+    draw_timing_section(app);
 
     if (ImGui::Button("Start"))
     {
@@ -979,7 +1028,11 @@ int main(int argc, char** argv)
         {
             handle_events(app);
             keyboard_input_update(&app->keyboard, app->shell.window);
-            run_core_frame(app);
+            update_timing(app);
+            if (frame_timing_frame_due(&app->timing))
+            {
+                run_core_frame(app);
+            }
 
             if (app_shell_begin_frame(&app->shell))
             {
@@ -996,6 +1049,8 @@ int main(int argc, char** argv)
                     break;
                 }
             }
+            // Exact mode: vsync is off, so this is what keeps the loop at the core's fps.
+            frame_timing_wait(&app->timing);
         }
 
         core_stop(app);

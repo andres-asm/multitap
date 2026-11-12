@@ -267,3 +267,28 @@ bool app_shell_present(AppShell* shell, ClearColor clear_color)
     }
     return result == RenderFrameResult::ok;
 }
+
+bool app_shell_set_vsync(AppShell* shell, bool vsync)
+{
+    if (shell->swapchain.vsync == vsync)
+    {
+        return true;
+    }
+    shell->swapchain.vsync = vsync;
+    return recreate_swapchain(shell);
+}
+
+double app_shell_display_refresh_hz(const AppShell* shell)
+{
+    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(shell->window));
+    if (mode == nullptr)
+    {
+        return 0.0;
+    }
+    // The exact ratio when the driver gives one (59.94 = 60000/1001); else the rounded float.
+    if (mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0)
+    {
+        return static_cast<double>(mode->refresh_rate_numerator) / static_cast<double>(mode->refresh_rate_denominator);
+    }
+    return static_cast<double>(mode->refresh_rate);
+}

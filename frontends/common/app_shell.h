@@ -68,6 +68,14 @@ bool app_shell_begin_frame(AppShell* shell);
 // if recording started; callers may then record uploads (outside the rendering pass).
 bool app_shell_acquire(AppShell* shell);
 
+// Turns vsync on (FIFO) or off (MAILBOX, else IMMEDIATE), recreating the
+// swapchain if it changes. Returns false only on a fatal error.
+bool app_shell_set_vsync(AppShell* shell, bool vsync);
+
+// The refresh rate of the display the window is on, in Hz (e.g. 59.91), or 0
+// if SDL doesn't know it.
+double app_shell_display_refresh_hz(const AppShell* shell);
+
 // Draws the ImGui UI and presents (acquiring first if the caller didn't).
 // Returns false only on a fatal Vulkan error.
 bool app_shell_present(AppShell* shell, ClearColor clear_color);

@@ -72,10 +72,42 @@ static VkSurfaceFormatKHR choose_surface_format(VkPhysicalDevice physical_device
     return chosen;
 }
 
-// FIFO is guaranteed by the spec and is "vsync on". Mode switching
-// (MAILBOX as "vsync off") comes later with VK_KHR_present_wait pacing.
-static VkPresentModeKHR choose_present_mode()
+// FIFO is guaranteed by the spec and is "vsync on". Without vsync we prefer
+// MAILBOX (no tearing: the newest frame replaces a waiting one) over
+// IMMEDIATE (may tear), and fall back to FIFO when the driver has neither
+// (MoltenVK, some Android drivers).
+static VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, bool vsync)
 {
+    if (vsync)
+    {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    constexpr uint32_t MAX_MODES = 16;
+    VkPresentModeKHR modes[MAX_MODES] = {};
+    uint32_t count = MAX_MODES;
+    VkResult result = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, modes);
+    if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+    {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    bool has_mailbox = false;
+    bool has_immediate = false;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        has_mailbox = has_mailbox || modes[i] == VK_PRESENT_MODE_MAILBOX_KHR;
+        has_immediate = has_immediate || modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    if (has_mailbox)
+    {
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    }
+    if (has_immediate)
+    {
+        return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    SDL_LogWarn(SDL_LOG_CATEGORY_GPU, "Vsync off requested, but the driver only offers FIFO: staying on vsync");
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
@@ -116,7 +148,7 @@ static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanC
         SDL_LogError(SDL_LOG_CATEGORY_GPU, "Surface reports no formats");
         return false;
     }
-    swapchain->present_mode = choose_present_mode();
+    swapchain->present_mode = choose_present_mode(context->physical_device, surface, swapchain->vsync);
 
     // currentExtent == 0xFFFFFFFF means "the surface size follows the swapchain", so we pick.
     if (capabilities.currentExtent.width != UINT32_MAX)

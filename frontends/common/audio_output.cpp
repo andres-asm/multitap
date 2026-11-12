@@ -143,6 +143,47 @@ void audio_output_set_sample_rate(AudioOutput* output, double sample_rate)
     output->sample_rate = hz;
 }
 
+static void apply_ratio(AudioOutput* output, double ratio)
+{
+    // SDL accepts 0.01..100; anything far from 1 here would be a bug upstream.
+    if (ratio < 0.5 || ratio > 2.0 || ratio == output->current_ratio)
+    {
+        return;
+    }
+    if (SDL_SetAudioStreamFrequencyRatio(output->stream, static_cast<float>(ratio)))
+    {
+        output->current_ratio = ratio;
+    }
+}
+
+void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_control)
+{
+    if (output->stream == nullptr)
+    {
+        return;
+    }
+    output->base_ratio = base_ratio;
+    output->rate_control = rate_control;
+    if (!rate_control)
+    {
+        apply_ratio(output, base_ratio);
+    }
+}
+
+// DRC: more queued than the target -> play a little faster, less -> slower.
+// Proportional, so the queue settles near the target without oscillating.
+static void update_rate_control(AudioOutput* output, int64_t queued_frames_now)
+{
+    if (!output->rate_control)
+    {
+        return;
+    }
+    double target = static_cast<double>(output->sample_rate) * AUDIO_OUTPUT_DRC_TARGET_MS / 1000.0;
+    double deviation = (static_cast<double>(queued_frames_now) - target) / target;
+    deviation = deviation < -1.0 ? -1.0 : (deviation > 1.0 ? 1.0 : deviation);
+    apply_ratio(output, output->base_ratio * (1.0 + AUDIO_OUTPUT_DRC_MAX_DEVIATION * deviation));
+}
+
 void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frames)
 {
     if (output->stream == nullptr || samples == nullptr || frames == 0)
@@ -175,6 +216,7 @@ void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frame
         queued = queued_frames(output);
     }
     output->started = true;
+    update_rate_control(output, queued);
 
     // Too far ahead (display faster than the core, or a burst of frames):
     // dropping this block keeps latency bounded at the cost of a click (see the

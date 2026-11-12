@@ -20,7 +20,12 @@ struct VulkanSwapchain
 {
     VkSwapchainKHR     swapchain      = VK_NULL_HANDLE;
     VkSurfaceFormatKHR surface_format = {};
-    VkPresentModeKHR   present_mode   = VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR   present_mode   = VK_PRESENT_MODE_FIFO_KHR;   // what we got
+
+    // What the frontend wants. true = FIFO (vsync on). false = MAILBOX, else
+    // IMMEDIATE (vsync off), else FIFO if the driver has neither. Read on every
+    // (re)create, so change it and recreate to switch.
+    bool               vsync          = true;
     VkExtent2D         extent         = {};
 
     uint32_t    min_image_count = 0;   // what we asked for

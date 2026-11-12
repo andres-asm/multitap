@@ -23,6 +23,7 @@ add_executable(libretro_test_frontend
     frontend/main.cpp
     frontend/fixed_input.cpp
     frontend/keyboard_input.cpp
+    frontend/frame_timing.cpp
 )
 target_link_libraries(libretro_test_frontend PRIVATE host_libretro frontend_common)
 multitap_set_project_flags(libretro_test_frontend)
@@ -134,7 +135,7 @@ if(MULTITAP_BUILD_TESTS)
                      COMMAND libretro_core_info --options-version ${_version} --frames 10
                              --set libretro_test_width=720 $<TARGET_FILE:test_libretro>)
             set_tests_properties(host_libretro_test_libretro_options_v${_version} PROPERTIES
-                PASS_REGULAR_EXPRESSION "Options: 2 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
+                PASS_REGULAR_EXPRESSION "Options: 4 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
                 FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
         endforeach()
 
@@ -192,6 +193,15 @@ if(MULTITAP_BUILD_TESTS)
         set_tests_properties(host_libretro_state_empty_slot PROPERTIES
             FIXTURES_REQUIRED state_saved
             PASS_REGULAR_EXPRESSION "Savestate: slot 7 is empty")
+
+        # Height and frame rate change the core's maximum size and timing: they must
+        # come through SET_SYSTEM_AV_INFO, and the frames that follow must match.
+        add_test(NAME host_libretro_test_libretro_av_info
+                 COMMAND libretro_core_info --frames 10 --set libretro_test_height=720 --set libretro_test_fps=30
+                         $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_test_libretro_av_info PROPERTIES
+            PASS_REGULAR_EXPRESSION "SET_SYSTEM_AV_INFO +\\( *32\\) handled +640x720 @ 30\\.000 fps.*Ran 10 frames: 10 video frames \\(640x720\\), 0 duplicates, 0 video errors, 16000 audio frames"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
 
         # A value that isn't one of the option's values must be refused.
         add_test(NAME host_libretro_option_bad_value
