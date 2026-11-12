@@ -239,7 +239,7 @@ void pixel_font_draw_text(uint32_t* pixels, int32_t width, int32_t height, int32
             for (int32_t column = 0; column < PIXEL_FONT_GLYPH_WIDTH; column++)
             {
                 // Bit 4 is the leftmost pixel.
-                if ((rows[row] >> (PIXEL_FONT_GLYPH_WIDTH - 1 - column)) & 1u)
+                if ((static_cast<uint32_t>(rows[row]) >> static_cast<uint32_t>(PIXEL_FONT_GLYPH_WIDTH - 1 - column)) & 1u)
                 {
                     fill_block(pixels, width, height, pitch_pixels, pen_x + column * scale, pen_y + row * scale, scale, color);
                 }

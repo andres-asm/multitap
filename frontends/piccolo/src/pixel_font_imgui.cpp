@@ -96,7 +96,7 @@ static bool loader_load_glyph(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked
     {
         for (int32_t x = 0; x < PIXEL_FONT_GLYPH_WIDTH; x++)
         {
-            if (((rows[y] >> (PIXEL_FONT_GLYPH_WIDTH - 1 - x)) & 1u) == 0)
+            if (((static_cast<uint32_t>(rows[y]) >> static_cast<uint32_t>(PIXEL_FONT_GLYPH_WIDTH - 1 - x)) & 1u) == 0)
             {
                 continue;
             }

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "host_fs.h"
 #include "host_log.h"
 #include "libretro_environment.h"
 
@@ -218,7 +219,9 @@ static int16_t RETRO_CALLCONV input_state_callback(unsigned port, unsigned devic
         case RETRO_DEVICE_JOYPAD:  return joypad_state(&host->input, port, id);
         case RETRO_DEVICE_ANALOG:  return analog_state(&host->input, port, index, id);
         case RETRO_DEVICE_POINTER: return pointer_state(&host->input, port, index, id);
-        default:                   return 0;   // mouse, keyboard, lightgun: later
+        // One keyboard for every port, like other frontends.
+        case RETRO_DEVICE_KEYBOARD: return id < LIBRETRO_KEY_COUNT ? static_cast<int16_t>(host->input.keys[id]) : 0;
+        default:                   return 0;   // mouse, lightgun: later
     }
 }
 
@@ -239,56 +242,153 @@ static bool copy_path(char* destination, size_t destination_size, const char* so
     return true;
 }
 
-// Reads a whole file into a new[] buffer. On success the caller owns *data.
-static bool read_whole_file(const char* path, uint8_t** data, size_t* size)
-{
-    *data = nullptr;
-    *size = 0;
-
-    FILE* file = std::fopen(path, "rb");
-    if (file == nullptr)
-    {
-        host_log(LogLevel::error, "Could not open %s", path);
-        return false;
-    }
-
-    if (std::fseek(file, 0, SEEK_END) != 0)
-    {
-        host_log(LogLevel::error, "Could not seek in %s", path);
-        std::fclose(file);
-        return false;
-    }
-    long end = std::ftell(file);
-    if (end < 0)
-    {
-        host_log(LogLevel::error, "Could not get the size of %s", path);
-        std::fclose(file);
-        return false;
-    }
-    std::rewind(file);
-
-    size_t file_size = static_cast<size_t>(end);
-    // new[] of size 0 is valid; an empty file is still "content".
-    uint8_t* buffer = new uint8_t[file_size > 0 ? file_size : 1];
-
-    size_t read = std::fread(buffer, 1, file_size, file);
-    std::fclose(file);
-
-    if (read != file_size)
-    {
-        host_log(LogLevel::error, "Short read on %s (%zu of %zu bytes)", path, read, file_size);
-        delete[] buffer;
-        return false;
-    }
-
-    *data = buffer;
-    *size = file_size;
-    return true;
-}
-
 static const char* safe_string(const char* text)
 {
     return text != nullptr ? text : "(null)";
+}
+
+// ---------------------------------------------------------------------------
+// Per-game files (SRAM, RTC, later savestates)
+// ---------------------------------------------------------------------------
+
+// "snes9x" from ".../snes9x_libretro.so".
+static bool core_short_name(const LibretroHost* host, char* out, size_t out_size)
+{
+    if (!host_fs_stem(host->core_path, out, out_size))
+    {
+        return false;
+    }
+    static const char SUFFIX[] = "_libretro";
+    size_t length = std::strlen(out);
+    size_t suffix_length = sizeof(SUFFIX) - 1;
+    if (length > suffix_length && std::strcmp(out + length - suffix_length, SUFFIX) == 0)
+    {
+        out[length - suffix_length] = '\0';
+    }
+    return true;
+}
+
+// <data>/<folder>/<core>/<game><extension>. The game is the content file's
+// name without extension, or the core's name when it runs without content.
+// False if there's no data directory or the path doesn't fit.
+static bool game_file_path(const LibretroHost* host, const char* folder, const char* extension, char* out, size_t out_size)
+{
+    char core_name[256] = {};
+    char game_name[256] = {};
+    if (host->data_directory[0] == '\0' || !core_short_name(host, core_name, sizeof(core_name)))
+    {
+        return false;
+    }
+    bool named = host->content_path[0] != '\0' ? host_fs_stem(host->content_path, game_name, sizeof(game_name))
+                                                : core_short_name(host, game_name, sizeof(game_name));
+    if (!named)
+    {
+        return false;
+    }
+    int written = std::snprintf(out, out_size, "%s/%s/%s/%s%s", host->data_directory, folder, core_name, game_name, extension);
+    return written > 0 && static_cast<size_t>(written) < out_size;
+}
+
+// The core memory regions we keep in files. libretro only offers a raw view
+// of the core's memory (no slots, no versions): we copy it in and out as is.
+struct MemoryRegion
+{
+    unsigned    id;
+    const char* extension;
+    const char* label;
+};
+
+static const MemoryRegion MEMORY_REGIONS[] = {
+    { RETRO_MEMORY_SAVE_RAM, ".srm", "SRAM" },
+    { RETRO_MEMORY_RTC,      ".rtc", "RTC" },
+};
+
+constexpr size_t MEMORY_REGION_COUNT = sizeof(MEMORY_REGIONS) / sizeof(MEMORY_REGIONS[0]);
+
+// The core's buffer for a region, or nullptr (size 0) if it has none.
+static void* memory_region(LibretroHost* host, unsigned id, size_t* size)
+{
+    host_enter(host);
+    void* data = host->core.retro_get_memory_data(id);
+    *size = host->core.retro_get_memory_size(id);
+    host_leave(host);
+    if (data == nullptr || *size == 0)
+    {
+        *size = 0;
+        return nullptr;
+    }
+    return data;
+}
+
+// Right after retro_load_game: the memory pointers are valid from then on.
+static void load_memory_regions(LibretroHost* host)
+{
+    for (size_t i = 0; i < MEMORY_REGION_COUNT; i++)
+    {
+        const MemoryRegion* region = &MEMORY_REGIONS[i];
+        size_t size = 0;
+        void* data = memory_region(host, region->id, &size);
+        char path[LIBRETRO_PATH_MAX] = {};
+        if (data == nullptr || !game_file_path(host, "saves", region->extension, path, sizeof(path)))
+        {
+            continue;
+        }
+        if (!host_fs_exists(path))
+        {
+            host_log(LogLevel::info, "%s: %zu bytes, no %s yet (new game)", region->label, size, path);
+            continue;
+        }
+
+        uint8_t* file_data = nullptr;
+        size_t file_size = 0;
+        if (!host_fs_read_file(path, &file_data, &file_size))
+        {
+            continue;
+        }
+        // Sizes can legitimately differ (core update, another core's file):
+        // copy what fits and say so rather than refuse.
+        size_t copy = file_size < size ? file_size : size;
+        std::memcpy(data, file_data, copy);
+        delete[] file_data;
+        if (file_size != size)
+        {
+            host_log(LogLevel::warning, "%s: %s has %zu bytes, the core has %zu; loaded %zu", region->label, path,
+                     file_size, size, copy);
+        }
+        else
+        {
+            host_log(LogLevel::info, "%s: loaded %zu bytes from %s", region->label, size, path);
+        }
+    }
+}
+
+bool libretro_host_save_memory(LibretroHost* host)
+{
+    if (!host->game_loaded)
+    {
+        return false;
+    }
+    bool ok = true;
+    for (size_t i = 0; i < MEMORY_REGION_COUNT; i++)
+    {
+        const MemoryRegion* region = &MEMORY_REGIONS[i];
+        size_t size = 0;
+        void* data = memory_region(host, region->id, &size);
+        char path[LIBRETRO_PATH_MAX] = {};
+        if (data == nullptr || !game_file_path(host, "saves", region->extension, path, sizeof(path)))
+        {
+            continue;
+        }
+        if (host_fs_write_file(path, data, size))
+        {
+            host_log(LogLevel::info, "%s: wrote %zu bytes to %s", region->label, size, path);
+        }
+        else
+        {
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +405,8 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
 
     if (!copy_path(host->core_path, sizeof(host->core_path), core_path, "Core") ||
         !copy_path(host->system_directory, sizeof(host->system_directory), config->system_directory, "System directory") ||
-        !copy_path(host->save_directory, sizeof(host->save_directory), config->save_directory, "Save directory"))
+        !copy_path(host->save_directory, sizeof(host->save_directory), config->save_directory, "Save directory") ||
+        !copy_path(host->data_directory, sizeof(host->data_directory), config->data_directory, "Data directory"))
     {
         return false;
     }
@@ -427,7 +528,7 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path)
 
         if (!host->system_info.need_fullpath)
         {
-            if (!read_whole_file(host->content_path, &host->content_data, &host->content_size))
+            if (!host_fs_read_file(host->content_path, &host->content_data, &host->content_size))
             {
                 return false;
             }
@@ -460,6 +561,8 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path)
     host->core.retro_get_system_av_info(&host->av_info);
     host_leave(host);
 
+    load_memory_regions(host);
+
     const retro_game_geometry* geometry = &host->av_info.geometry;
     host_log(LogLevel::info, "Video: base %ux%u, max %ux%u, aspect %.4f, %.4f fps",
              geometry->base_width, geometry->base_height, geometry->max_width, geometry->max_height,
@@ -472,6 +575,9 @@ void libretro_host_unload_game(LibretroHost* host)
 {
     if (host->game_loaded)
     {
+        // Before retro_unload_game: after it, the memory pointers are gone.
+        libretro_host_save_memory(host);
+
         host_enter(host);
         host->core.retro_unload_game();
         host_leave(host);
@@ -496,6 +602,19 @@ void libretro_host_unload_game(LibretroHost* host)
 void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input)
 {
     host->input = *input;
+}
+
+bool libretro_host_keyboard_event(LibretroHost* host, bool down, unsigned keycode, uint32_t character, uint16_t modifiers)
+{
+    if (host->keyboard_callback == nullptr || !host->core_initialized)
+    {
+        return false;
+    }
+    // A call into the core like any other: the core may call back into us from it.
+    host_enter(host);
+    host->keyboard_callback(down, keycode, character, modifiers);
+    host_leave(host);
+    return true;
 }
 
 bool libretro_host_set_option(LibretroHost* host, const char* key, const char* value)

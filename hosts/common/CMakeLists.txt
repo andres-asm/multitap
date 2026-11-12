@@ -5,6 +5,7 @@
 add_library(host_common STATIC
     host_log.cpp
     dynamic_library.cpp
+    host_fs.cpp
 )
 
 target_include_directories(host_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

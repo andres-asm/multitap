@@ -296,6 +296,17 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
 
         // --- Input -----------------------------------------------------------
 
+        case RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK:
+        {
+            if (data == nullptr)
+            {
+                return null_data(note, note_size);
+            }
+            host->keyboard_callback = static_cast<const retro_keyboard_callback*>(data)->callback;
+            std::snprintf(note, note_size, "%s", host->keyboard_callback != nullptr ? "registered" : "cleared");
+            return EnvironmentResult::handled;
+        }
+
         case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
         {
             // Specified with NULL data: returning true IS the answer

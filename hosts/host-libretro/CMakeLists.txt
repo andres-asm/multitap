@@ -22,6 +22,7 @@ multitap_set_project_flags(host_libretro)
 add_executable(libretro_test_frontend
     frontend/main.cpp
     frontend/fixed_input.cpp
+    frontend/keyboard_input.cpp
 )
 target_link_libraries(libretro_test_frontend PRIVATE host_libretro frontend_common)
 multitap_set_project_flags(libretro_test_frontend)
@@ -136,6 +137,34 @@ if(MULTITAP_BUILD_TESTS)
                 PASS_REGULAR_EXPRESSION "Options: 2 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
                 FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
         endforeach()
+
+        # Save RAM: the host writes it on unload and loads it back on the next run.
+        # libretro test exposes a 60-byte block; untouched, the core reports it as "empty".
+        set(SRAM_DIR "${CMAKE_CURRENT_BINARY_DIR}/sram-test")
+        add_test(NAME host_libretro_sram_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${SRAM_DIR}")
+        set_tests_properties(host_libretro_sram_clean PROPERTIES FIXTURES_SETUP sram_clean)
+
+        add_test(NAME host_libretro_sram_first_run
+                 COMMAND libretro_core_info --data-dir "${SRAM_DIR}" --frames 2 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_sram_first_run PROPERTIES
+            FIXTURES_REQUIRED sram_clean
+            FIXTURES_SETUP sram_written
+            PASS_REGULAR_EXPRESSION "SRAM: 60 bytes, no [^\n]*test\\.srm yet.*SRAM: wrote 60 bytes"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
+
+        add_test(NAME host_libretro_sram_reload
+                 COMMAND libretro_core_info --data-dir "${SRAM_DIR}" --frames 2 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_sram_reload PROPERTIES
+            FIXTURES_REQUIRED sram_written
+            PASS_REGULAR_EXPRESSION "SRAM: loaded 60 bytes.*save RAM: empty"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|CORRUPTED")
+
+        # Junk in the .srm must be noticed by the core, not silently accepted.
+        set(SRAM_BAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/sram-bad-test")
+        file(WRITE "${SRAM_BAD_DIR}/saves/test/test.srm" "this is not the save RAM layout libretro test writes!!!!!!!!")
+        add_test(NAME host_libretro_sram_corrupted
+                 COMMAND libretro_core_info --data-dir "${SRAM_BAD_DIR}" --frames 1 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_sram_corrupted PROPERTIES PASS_REGULAR_EXPRESSION "save RAM: CORRUPTED")
 
         # A value that isn't one of the option's values must be refused.
         add_test(NAME host_libretro_option_bad_value

@@ -21,6 +21,7 @@
 #include "audio_output.h"
 #include "debug_ui.h"
 #include "fixed_input.h"
+#include "keyboard_input.h"
 #include "libretro_host.h"
 #include "vk_texture.h"
 
@@ -57,6 +58,10 @@ struct App
     ImageArea    image_area = {};
     SDL_Gamepad* gamepad = nullptr;
     FixedInput   fixed_input = {};
+    KeyboardInput keyboard   = {};   // libretro keyboard + game focus (Scroll Lock / F12)
+
+    // Where the host keeps SRAM and savestates ("~/.host-libretro", resolved at startup).
+    char data_directory[LIBRETRO_PATH_MAX] = {};
 
     AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
 
@@ -249,6 +254,7 @@ static void core_start(App* app)
 
     LibretroHostConfig config = {};
     config.core_options_version = app->options_version;
+    config.data_directory = app->data_directory;
     if (!libretro_host_load_core(app->host, core_path, &config))
     {
         set_status(app, "Could not load the core %s (see the log)", core_path);
@@ -323,8 +329,10 @@ static void run_core_frame(App* app)
     app->step_once = false;
 
     LibretroInputState input = {};
-    bool keyboard_enabled = !ImGui::GetIO().WantTextInput;
+    // In game focus the keyboard is the core's keyboard, not the fixed joypad keys.
+    bool keyboard_enabled = !ImGui::GetIO().WantTextInput && !app->keyboard.game_focus;
     fixed_input_read(&app->fixed_input, &input, keyboard_enabled, app->gamepad);
+    keyboard_input_read(&app->keyboard, &input);
     read_pointer(app, &input);
 
     libretro_host_set_input(app->host, &input);
@@ -478,6 +486,20 @@ static void draw_controls_window(App* app)
     ImGui::Text("Frontend: %.1f FPS (%s)", static_cast<double>(io.Framerate),
                 app->shell.vulkan.physical_device_properties.deviceName);
     ImGui::Text("Gamepad: %s", app->gamepad != nullptr ? SDL_GetGamepadName(app->gamepad) : "none");
+    bool game_focus = app->keyboard.game_focus;
+    if (ImGui::Checkbox("Game focus (Scroll Lock / F12)", &game_focus))
+    {
+        keyboard_input_set_game_focus(&app->keyboard, game_focus, app->host, app->shell.window);
+    }
+    ImGui::SetItemTooltip("While on, the keyboard is the core's keyboard (typing, computers) and the fixed joypad "
+                          "keys are off. The gamepad works either way.");
+    if (game_focus)
+    {
+        ImGui::SameLine();
+        ImGui::TextUnformatted(app->host->keyboard_callback != nullptr ? "(core has a keyboard callback)"
+                                                                       : "(core only polls keys)");
+    }
+    ImGui::Text("Saves and states: %s", app->data_directory[0] != '\0' ? app->data_directory : "(none)");
 
     if (ImGui::CollapsingHeader("Controls"))
     {
@@ -755,8 +777,15 @@ static void handle_events(App* app)
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
+        // In game focus, keys and typed text belong to the core alone: neither
+        // ImGui nor the fixed joypad keys see them.
+        if (keyboard_input_handle_event(&app->keyboard, &event, app->host, app->shell.window))
+        {
+            continue;
+        }
         app_shell_process_event(&app->shell, &event);
-        fixed_input_handle_event(&app->fixed_input, &event, !ImGui::GetIO().WantTextInput, app->gamepad);
+        fixed_input_handle_event(&app->fixed_input, &event, !ImGui::GetIO().WantTextInput && !app->keyboard.game_focus,
+                                 app->gamepad);
 
         switch (event.type)
         {
@@ -828,6 +857,9 @@ int main(int argc, char** argv)
         // Own layout file, so it doesn't fight with piccolo's imgui.ini in the same folder.
         io.IniFilename = "libretro_test_frontend.ini";
 
+        // Decided for now: per-game host data (SRAM, savestates) under ~/.host-libretro.
+        resolve_user_path("~/.host-libretro", app->data_directory, sizeof(app->data_directory));
+
         set_status(app, "Choose a core (path, command line, or drag and drop)");
         if (argc > 1)
         {
@@ -846,6 +878,7 @@ int main(int argc, char** argv)
         while (app->running)
         {
             handle_events(app);
+            keyboard_input_update(&app->keyboard, app->shell.window);
             run_core_frame(app);
 
             if (app_shell_begin_frame(&app->shell))

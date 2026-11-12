@@ -31,6 +31,9 @@ constexpr size_t LIBRETRO_PATH_MAX = 4096;
 
 constexpr unsigned LIBRETRO_MAX_PORTS = 4;
 
+// RETRO_DEVICE_KEYBOARD key states are indexed by RETROK_* code.
+constexpr unsigned LIBRETRO_KEY_COUNT = RETROK_LAST;
+
 // Input as the frontend sees it this frame, in RetroPad terms. The frontend
 // fills this (keyboard, gamepads, mouse... mapped however it likes) and hands it
 // over with libretro_host_set_input() before libretro_host_run_frame().
@@ -44,6 +47,11 @@ struct LibretroInputState
     int16_t  pointer_x       = 0;
     int16_t  pointer_y       = 0;
     bool     pointer_pressed = false;
+
+    // Keyboard (RETRO_DEVICE_KEYBOARD, any port): 1 = key held, by RETROK_* code.
+    // Cores that want typed text use the keyboard callback instead
+    // (libretro_host_keyboard_event), which also carries the character.
+    uint8_t  keys[LIBRETRO_KEY_COUNT] = {};
 };
 
 // Counters for debug UIs and tests.
@@ -64,6 +72,11 @@ struct LibretroHostConfig
     const char* system_directory = "";
     const char* save_directory   = "";
 
+    // Where the HOST keeps per-game data: SRAM/RTC in <data>/saves/<core>/<game>.srm
+    // (.rtc) and savestates in <data>/states/<core>/<game>.state<N>. Empty = not saved.
+    // (save_directory above is what the core is told for its OWN files.)
+    const char* data_directory   = "";
+
     // Highest core options version we tell the core about (GET_CORE_OPTIONS_VERSION):
     // 2 = v2, 1 = v1, 0 = don't answer at all, like a frontend from before
     // options existed. It only changes what the core THINKS we support (so its
@@ -82,6 +95,7 @@ struct LibretroHost
     char core_path[LIBRETRO_PATH_MAX]        = {};
     char system_directory[LIBRETRO_PATH_MAX] = {};
     char save_directory[LIBRETRO_PATH_MAX]   = {};
+    char data_directory[LIBRETRO_PATH_MAX]   = {};
     char content_path[LIBRETRO_PATH_MAX]     = {};
 
     // Content loaded into memory (when the core doesn't need a path).
@@ -108,6 +122,9 @@ struct LibretroHost
     LibretroOptions options              = {};
     uint32_t        core_options_version = 2;   // copied from the config at load
 
+    // Set by the core with SET_KEYBOARD_CALLBACK; nullptr = it doesn't want key events.
+    retro_keyboard_event_t keyboard_callback = nullptr;
+
     // What the core asked for through the environment callback.
     retro_pixel_format pixel_format       = RETRO_PIXEL_FORMAT_0RGB1555;   // libretro's default
     bool               supports_no_game   = false;
@@ -126,6 +143,18 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path);
 
 // Replaces the input the core will see on its next input_state calls.
 void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input);
+
+// Writes the core's save RAM (and RTC, if any) to the data directory now.
+// Also done automatically when the game is unloaded; call this too every so
+// often so a crash loses little. Returns false if anything failed (logged).
+bool libretro_host_save_memory(LibretroHost* host);
+
+// Forwards one key event to the core's keyboard callback, if it registered
+// one (SET_KEYBOARD_CALLBACK). keycode = RETROK_*, character = the UTF-32
+// character typed (0 if none), modifiers = RETROKMOD_* bits. Typed text can
+// come as key-down events with keycode RETROK_UNKNOWN and only a character.
+// Call outside retro_run (between frames). Returns false if the core has no callback.
+bool libretro_host_keyboard_event(LibretroHost* host, bool down, unsigned keycode, uint32_t character, uint16_t modifiers);
 
 // Changes a core option. The core sees it on its next GET_VARIABLE_UPDATE /
 // GET_VARIABLE (usually during the next retro_run). Fails (logged) for an

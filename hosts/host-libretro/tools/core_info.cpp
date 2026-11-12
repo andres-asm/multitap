@@ -5,7 +5,7 @@
 //
 // Usage:
 //   libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]
-//                      [--options-version N] [--set KEY=VALUE]... <core> [content]
+//                      [--options-version N] [--data-dir DIR] [--set KEY=VALUE]... <core> [content]
 //
 // Without content, cores that support it are started with no game.
 
@@ -20,12 +20,13 @@ static void print_usage()
 {
     std::fprintf(stderr,
                  "usage: libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]\n"
-                 "                          [--options-version N] [--set KEY=VALUE]... <core> [content]\n"
+                 "                          [--options-version N] [--data-dir DIR] [--set KEY=VALUE]... <core> [content]\n"
                  "  --verbose            also log repeated environment calls and core debug output\n"
                  "  --frames N           run N frames after loading (headless, no input)\n"
                  "  --system DIR         directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
                  "  --save DIR           directory returned for GET_SAVE_DIRECTORY (default: none)\n"
                  "  --options-version N  core options version to report: 2, 1 or 0 (default 2)\n"
+                 "  --data-dir DIR       where the host keeps SRAM and savestates (default: none)\n"
                  "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n");
 }
 
@@ -93,6 +94,11 @@ int main(int argc, char** argv)
         {
             i++;
             config.core_options_version = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+        }
+        else if (std::strcmp(argument, "--data-dir") == 0 && i + 1 < argc)
+        {
+            i++;
+            config.data_directory = argv[i];
         }
         else if (std::strcmp(argument, "--set") == 0 && i + 1 < argc && option_set_count < MAX_OPTION_SETS)
         {
