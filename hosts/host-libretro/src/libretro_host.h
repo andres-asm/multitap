@@ -201,6 +201,9 @@ bool libretro_host_set_option(LibretroHost* host, const char* key, const char* v
 // holds exactly the audio this frame produced; play or drop it before the next call.
 bool libretro_host_run_frame(LibretroHost* host);
 
+// retro_reset: the core's "reset button". Does nothing if no game is loaded.
+void libretro_host_reset(LibretroHost* host);
+
 // Both are safe to call when nothing is loaded.
 void libretro_host_unload_game(LibretroHost* host);
 void libretro_host_unload_core(LibretroHost* host);

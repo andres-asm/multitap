@@ -185,3 +185,119 @@ void retro_ui_status_line(ImFont* pixel_font, int32_t scale, const char* text)
     ImGui::PopFont();
     ImGui::End();
 }
+
+// ---------------------------------------------------------------------------
+// Theme for windows and widgets
+// ---------------------------------------------------------------------------
+
+// Window and widget colors, all from the palette above (plus two darker
+// shades for list and field backgrounds).
+constexpr uint32_t FIELD_FACE   = 0xFF1E2E4Cu;
+constexpr uint32_t FIELD_HOVER  = 0xFF26385Cu;
+
+struct ThemeColor
+{
+    ImGuiCol slot;
+    uint32_t argb;
+};
+
+static const ThemeColor THEME_COLORS[] = {
+    { ImGuiCol_Text,                 TEXT_NORMAL },
+    { ImGuiCol_TextDisabled,         0xFF8090B0u },
+    { ImGuiCol_WindowBg,             PANEL_FACE },
+    { ImGuiCol_ChildBg,              FIELD_FACE },
+    { ImGuiCol_PopupBg,              PANEL_FACE },
+    { ImGuiCol_Border,               PANEL_DARK },
+    { ImGuiCol_TitleBg,              BAR_FACE },
+    { ImGuiCol_TitleBgActive,        BAR_FACE },
+    { ImGuiCol_TitleBgCollapsed,     BAR_FACE },
+    { ImGuiCol_MenuBarBg,            BAR_FACE },
+    { ImGuiCol_FrameBg,              FIELD_FACE },
+    { ImGuiCol_FrameBgHovered,       FIELD_HOVER },
+    { ImGuiCol_FrameBgActive,        FIELD_HOVER },
+    { ImGuiCol_Button,               BAR_FACE },
+    { ImGuiCol_ButtonHovered,        HIGHLIGHT_FACE },
+    { ImGuiCol_ButtonActive,         HIGHLIGHT_FACE },
+    { ImGuiCol_Header,               HIGHLIGHT_FACE },
+    { ImGuiCol_HeaderHovered,        HIGHLIGHT_FACE },
+    { ImGuiCol_HeaderActive,         HIGHLIGHT_FACE },
+    { ImGuiCol_CheckMark,            TEXT_HIGHLIGHT },
+    { ImGuiCol_ScrollbarBg,          FIELD_FACE },
+    { ImGuiCol_ScrollbarGrab,        BAR_FACE },
+    { ImGuiCol_ScrollbarGrabHovered, HIGHLIGHT_FACE },
+    { ImGuiCol_ScrollbarGrabActive,  HIGHLIGHT_FACE },
+    { ImGuiCol_NavCursor,            TEXT_HIGHLIGHT },
+};
+
+constexpr int THEME_COLOR_COUNT = static_cast<int>(sizeof(THEME_COLORS) / sizeof(THEME_COLORS[0]));
+constexpr int THEME_VAR_COUNT = 12;   // the PushStyleVar calls in retro_ui_push_theme
+
+void retro_ui_push_theme(ImFont* pixel_font, int32_t scale)
+{
+    float block = static_cast<float>(scale);
+    ImGui::PushFont(pixel_font, PIXEL_FONT_IMGUI_UNIT * block);
+    for (int i = 0; i < THEME_COLOR_COUNT; i++)
+    {
+        ImGui::PushStyleColor(THEME_COLORS[i].slot, to_imgui(THEME_COLORS[i].argb));
+    }
+    // Same metrics as the menu bar, in retro pixels.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * block, 4.0f * block));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3.0f * block, 2.0f * block));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f * block, 2.0f * block));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(3.0f * block, 2.0f * block));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 5.0f * block);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);   // bevels drawn instead
+}
+
+void retro_ui_pop_theme()
+{
+    ImGui::PopStyleVar(THEME_VAR_COUNT);
+    ImGui::PopStyleColor(THEME_COLOR_COUNT);
+    ImGui::PopFont();
+}
+
+void retro_ui_begin_window(int32_t scale)
+{
+    use_nearest_sampler();
+    draw_bevel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), static_cast<float>(scale), PANEL_LIGHT, PANEL_DARK, true);
+}
+
+void retro_ui_end_window()
+{
+    use_linear_sampler();
+}
+
+// ---------------------------------------------------------------------------
+// Game picture
+// ---------------------------------------------------------------------------
+
+void retro_ui_game_picture(uint64_t texture_id, float uv_max_x, float uv_max_y, float aspect)
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    float width = io.DisplaySize.x;
+    float height = width / aspect;
+    if (height > io.DisplaySize.y)
+    {
+        height = io.DisplaySize.y;
+        width = height * aspect;
+    }
+    // Whole pixels, so the edges don't land between two screen pixels.
+    width = static_cast<float>(static_cast<int32_t>(width));
+    height = static_cast<float>(static_cast<int32_t>(height));
+    ImVec2 position((io.DisplaySize.x - width) * 0.5f, (io.DisplaySize.y - height) * 0.5f);
+    position.x = static_cast<float>(static_cast<int32_t>(position.x));
+    position.y = static_cast<float>(static_cast<int32_t>(position.y));
+
+    // The background draw list is behind every window, menu bar included.
+    ImDrawList* draw_list = ImGui::GetBackgroundDrawList();
+    draw_list->AddCallback(ImGui::GetPlatformIO().DrawCallback_SetSamplerNearest, nullptr);
+    draw_list->AddImage(ImTextureRef(static_cast<ImTextureID>(texture_id)), position,
+                        ImVec2(position.x + width, position.y + height), ImVec2(0.0f, 0.0f), ImVec2(uv_max_x, uv_max_y));
+    draw_list->AddCallback(ImGui::GetPlatformIO().DrawCallback_SetSamplerLinear, nullptr);
+}

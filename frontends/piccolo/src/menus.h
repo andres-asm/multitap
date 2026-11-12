@@ -18,6 +18,7 @@ enum class MenuAction
     sound,
     input,
     about,
+    debug_window,
 };
 
 int32_t     menus_count();

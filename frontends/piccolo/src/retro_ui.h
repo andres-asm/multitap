@@ -23,3 +23,17 @@ MenuAction retro_ui_menu_bar(ImFont* pixel_font, int32_t scale);
 // One line of text at the bottom left of the window, behind other windows, in
 // the pixel font with a drop shadow.
 void retro_ui_status_line(ImFont* pixel_font, int32_t scale, const char* text);
+
+// The retro look for any window and widget between push and pop: palette,
+// pixel font at `scale`, square corners, spacing in retro pixels. Pair them.
+void retro_ui_push_theme(ImFont* pixel_font, int32_t scale);
+void retro_ui_pop_theme();
+
+// Call right after ImGui::Begin() of a themed window: raised edges and
+// nearest-filtered text for that window. Call retro_ui_end_window() before End().
+void retro_ui_begin_window(int32_t scale);
+void retro_ui_end_window();
+
+// The core's picture filling the window behind everything, at `aspect`
+// (width / height), centered, with sharp pixels. uv_max = the used part of the texture.
+void retro_ui_game_picture(uint64_t texture_id, float uv_max_x, float uv_max_y, float aspect);

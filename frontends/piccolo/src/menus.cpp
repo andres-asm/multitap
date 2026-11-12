@@ -28,6 +28,7 @@ static const MenuItem CONFIG_ITEMS[] = {
 };
 
 static const MenuItem MISC_ITEMS[] = {
+    { "DEBUG WINDOW",  MenuAction::debug_window },
     { "ABOUT PICCOLO", MenuAction::about },
 };
 
@@ -78,6 +79,7 @@ const char* menu_action_name(MenuAction action)
         case MenuAction::sound:      return "SOUND";
         case MenuAction::input:      return "INPUT";
         case MenuAction::about:      return "ABOUT";
+        case MenuAction::debug_window: return "DEBUG WINDOW";
         default:                     return "?";
     }
 }

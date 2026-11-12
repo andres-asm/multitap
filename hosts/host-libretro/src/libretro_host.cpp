@@ -792,6 +792,18 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path)
     return true;
 }
 
+void libretro_host_reset(LibretroHost* host)
+{
+    if (!host->game_loaded)
+    {
+        return;
+    }
+    host_enter(host);
+    host->core.retro_reset();
+    host_leave(host);
+    host_log(LogLevel::info, "Reset");
+}
+
 void libretro_host_unload_game(LibretroHost* host)
 {
     if (host->game_loaded)

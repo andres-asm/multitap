@@ -68,6 +68,11 @@ void core_session_destroy(CoreSession* session, AppShell* shell);
 // Loads the core, then the content (nullptr or "" = none). Paths are used as
 // given (resolve "~" etc. before). On failure the core is unloaded again and
 // `message` says why.
+//
+// Start and stop destroy `texture`. Never call them in a frame after the
+// texture was handed to ImGui (image, draw list): that frame would render
+// with a destroyed descriptor set. Call them before the UI draws the picture,
+// or outside the frame (e.g. remember a UI choice and act on it next loop).
 bool core_session_start(CoreSession* session, AppShell* shell, const char* core_path, const char* content_path);
 void core_session_stop(CoreSession* session, AppShell* shell);
 bool core_session_running(const CoreSession* session);

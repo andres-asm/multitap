@@ -1,6 +1,6 @@
 # piccolo: basic libretro frontend built on host-libretro.
-# So far: SDL3 window + Vulkan swapchain + Dear ImGui debug UI (from frontend_common),
-# and a test of the retro-style UI (themed ImGui widgets with piccolo's pixel font).
+# Plays games through frontend_libretro's core session, with a retro-style UI
+# (themed ImGui widgets with piccolo's pixel font).
 
 # piccolo's own pixel font (5x5, drawn for piccolo; see src/pixel_font.h).
 # A small library so the preview tool and, later, piccolo's UI share it.
@@ -15,9 +15,10 @@ add_executable(piccolo
     src/menus.cpp
     src/retro_ui.cpp
     src/pixel_font_imgui.cpp
+    src/file_picker.cpp
 )
 
-target_link_libraries(piccolo PRIVATE frontend_common piccolo_font)
+target_link_libraries(piccolo PRIVATE frontend_libretro piccolo_font)
 
 multitap_set_project_flags(piccolo)
 multitap_copy_after_build(piccolo "${MULTITAP_BIN_DIR}")
