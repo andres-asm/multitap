@@ -10,6 +10,19 @@ option(MULTITAP_WARNINGS_AS_ERRORS "Treat warnings in our own code as errors"   
 option(MULTITAP_SANITIZE           "Build our own code with ASan + UBSan"         OFF)
 option(MULTITAP_BUILD_TESTS        "Build test cores and register CTest tests"    ON)
 
+# Where the libretro test core is copied after every build, so the test
+# frontend's core list (and other frontends) find it next to any other cores
+# dropped there. Not for sanitizer builds: an ASan-built core can't be loaded
+# by a normal frontend. Empty = don't copy.
+if(MULTITAP_SANITIZE)
+    set(_cores_dir_default "")
+elseif(WIN32)
+    set(_cores_dir_default "$ENV{USERPROFILE}/.host-libretro/cores")
+else()
+    set(_cores_dir_default "$ENV{HOME}/.host-libretro/cores")
+endif()
+set(MULTITAP_CORES_DIR "${_cores_dir_default}" CACHE PATH "Copy test cores here after building (empty = don't)")
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()

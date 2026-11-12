@@ -119,6 +119,18 @@ if(MULTITAP_BUILD_TESTS)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test-libretro/CMakeLists.txt")
         add_subdirectory(test-libretro)
 
+        # Copy the core to the shared cores folder after every build (only when
+        # it changed). A separate target because custom commands can't attach
+        # to a target from another directory.
+        if(MULTITAP_CORES_DIR)
+            add_custom_target(copy_test_cores ALL
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${MULTITAP_CORES_DIR}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:test_libretro> "${MULTITAP_CORES_DIR}/"
+                DEPENDS test_libretro
+                COMMENT "Copying test_libretro to ${MULTITAP_CORES_DIR}"
+                VERBATIM)
+        endif()
+
         # Headless smoke test: 120 frames of libretro test (environment page) through the host.
         # Checks retro_run, video copy/conversion and the input path under the sanitizers.
         add_test(NAME host_libretro_test_libretro_runs

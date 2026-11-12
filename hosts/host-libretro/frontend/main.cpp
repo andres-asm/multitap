@@ -9,6 +9,7 @@
 // Files can also be dragged onto the window (cores by extension, anything else is content).
 
 #include <cstdarg>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
@@ -41,6 +42,8 @@ struct ImageArea
     bool  held    = false;   // left mouse button held down on the image
 };
 
+constexpr int MAX_CORE_FILES = 128;
+
 struct App
 {
     AppShell shell = {};
@@ -65,6 +68,11 @@ struct App
     // Where the host keeps SRAM and savestates ("~/.host-libretro", resolved at startup).
     char data_directory[LIBRETRO_PATH_MAX] = {};
     uint32_t state_slot = 0;   // savestate slot for Save/Load (F2/F4), changed with F6/F7
+
+    // Cores offered in the Core list: every core file in <data>/cores.
+    char cores_directory[LIBRETRO_PATH_MAX] = {};
+    char core_files[MAX_CORE_FILES][256]   = {};   // file names, sorted
+    int  core_file_count                   = 0;
 
     AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
 
@@ -158,6 +166,83 @@ static bool ends_with(const char* text, const char* suffix)
 static bool looks_like_core(const char* path)
 {
     return ends_with(path, ".so") || ends_with(path, ".dll") || ends_with(path, ".dylib");
+}
+
+// qsort comparator for the core list: plain alphabetical order.
+static int compare_core_names(const void* a, const void* b)
+{
+    return std::strcmp(static_cast<const char*>(a), static_cast<const char*>(b));
+}
+
+// Re-reads the cores folder (cheap: a directory listing). Called when the
+// list opens, so cores copied there while running show up.
+static void scan_core_files(App* app)
+{
+    app->core_file_count = 0;
+    int count = 0;
+    char** names = SDL_GlobDirectory(app->cores_directory, "*", 0, &count);
+    if (names == nullptr)
+    {
+        return;
+    }
+    for (int i = 0; i < count && app->core_file_count < MAX_CORE_FILES; i++)
+    {
+        if (looks_like_core(names[i]) && std::strlen(names[i]) < sizeof(app->core_files[0]))
+        {
+            copy_path(app->core_files[app->core_file_count], sizeof(app->core_files[0]), names[i]);
+            app->core_file_count++;
+        }
+    }
+    SDL_free(names);
+    std::qsort(app->core_files, static_cast<size_t>(app->core_file_count), sizeof(app->core_files[0]), compare_core_names);
+}
+
+// The file name part of a path, for showing a core in the list.
+static const char* file_name_of(const char* path)
+{
+    const char* name = path;
+    for (const char* cursor = path; *cursor != '\0'; cursor++)
+    {
+        if (*cursor == '/' || *cursor == '\\')
+        {
+            name = cursor + 1;
+        }
+    }
+    return name;
+}
+
+static void draw_core_list(App* app)
+{
+    const char* preview = app->core_path[0] != '\0' ? file_name_of(app->core_path) : "choose a core";
+    if (ImGui::BeginCombo("Core", preview))
+    {
+        if (ImGui::IsWindowAppearing())
+        {
+            scan_core_files(app);
+        }
+        for (int i = 0; i < app->core_file_count; i++)
+        {
+            bool selected = std::strcmp(file_name_of(app->core_path), app->core_files[i]) == 0;
+            if (ImGui::Selectable(app->core_files[i], selected))
+            {
+                int written = std::snprintf(app->core_path, sizeof(app->core_path), "%s/%s", app->cores_directory,
+                                            app->core_files[i]);
+                if (written < 0 || static_cast<size_t>(written) >= sizeof(app->core_path))
+                {
+                    app->core_path[0] = '\0';
+                    set_status(app, "Core path too long");
+                }
+            }
+        }
+        if (app->core_file_count == 0)
+        {
+            ImGui::TextDisabled("No cores in %s", app->cores_directory);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Cores in %s (rescanned when opened). Drop a core onto the window or pass it on the "
+                          "command line to use one from elsewhere.\n%s",
+                          app->cores_directory, app->core_path[0] != '\0' ? app->core_path : "");
 }
 
 static bool core_running(const App* app)
@@ -518,7 +603,7 @@ static void draw_controls_window(App* app)
     ImGui::SetNextWindowSize(ImVec2(460.0f, 760.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("host-libretro");
 
-    ImGui::InputText("Core", app->core_path, sizeof(app->core_path));
+    draw_core_list(app);
     ImGui::InputTextWithHint("Content", "empty = start without content", app->content_path, sizeof(app->content_path));
 
     // Cores read GET_CORE_OPTIONS_VERSION once, while loading, so a change only
@@ -1008,6 +1093,16 @@ int main(int argc, char** argv)
 
         // Decided for now: per-game host data (SRAM, savestates) under ~/.host-libretro.
         resolve_user_path("~/.host-libretro", app->data_directory, sizeof(app->data_directory));
+        int written = std::snprintf(app->cores_directory, sizeof(app->cores_directory), "%s/cores", app->data_directory);
+        if (written > 0 && static_cast<size_t>(written) < sizeof(app->cores_directory))
+        {
+            SDL_CreateDirectory(app->cores_directory);   // so it's there to copy cores into
+            scan_core_files(app);
+        }
+        else
+        {
+            app->cores_directory[0] = '\0';
+        }
 
         set_status(app, "Choose a core (path, command line, or drag and drop)");
         if (argc > 1)
