@@ -56,8 +56,18 @@ struct App
 
     ImageArea    image_area = {};
     SDL_Gamepad* gamepad = nullptr;
+    FixedInput   fixed_input = {};
 
     AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
+
+    // Core options version we report to the next core we load (2, 1 or 0).
+    // Lower values make cores take their older options code paths.
+    uint32_t options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;
+
+    // The core geometry the Video window was last sized for. When the core's
+    // base size or aspect changes (load, SET_GEOMETRY, SET_SYSTEM_AV_INFO), the
+    // window is resized once; the user may resize it freely in between.
+    retro_game_geometry video_window_geometry = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -167,6 +177,7 @@ static void core_stop(App* app)
     libretro_host_unload_core(app->host);
     app->paused = false;
     app->image_area = ImageArea{};
+    app->video_window_geometry = retro_game_geometry{};   // the next core sizes the window again
 }
 
 static void core_start(App* app)
@@ -180,6 +191,7 @@ static void core_start(App* app)
     }
 
     LibretroHostConfig config = {};
+    config.core_options_version = app->options_version;
     if (!libretro_host_load_core(app->host, app->core_path, &config))
     {
         set_status(app, "Could not load the core (see the log)");
@@ -246,13 +258,16 @@ static void run_core_frame(App* app)
     // Running anyway would spin it at ~100 fps (app_shell sleeps 10 ms per loop).
     if (SDL_GetWindowFlags(app->shell.window) & SDL_WINDOW_MINIMIZED)
     {
+        // Nothing gets pushed while minimized, so the queue runs dry on purpose:
+        // clear it so restoring the window doesn't count as an underrun.
+        audio_output_clear(&app->audio);
         return;
     }
     app->step_once = false;
 
     LibretroInputState input = {};
     bool keyboard_enabled = !ImGui::GetIO().WantTextInput;
-    fixed_input_read(&input, keyboard_enabled, app->gamepad);
+    fixed_input_read(&app->fixed_input, &input, keyboard_enabled, app->gamepad);
     read_pointer(app, &input);
 
     libretro_host_set_input(app->host, &input);
@@ -309,6 +324,30 @@ static void draw_controls_window(App* app)
 
     ImGui::InputText("Core", app->core_path, sizeof(app->core_path));
     ImGui::InputTextWithHint("Content", "empty = start without content", app->content_path, sizeof(app->content_path));
+
+    // Cores read GET_CORE_OPTIONS_VERSION once, while loading, so a change only
+    // means something for the next load: unload now rather than show a mismatch.
+    static const char* const OPTIONS_API_NAMES[] = {
+        "v0 (SET_VARIABLES; version not answered)",
+        "v1 (SET_CORE_OPTIONS)",
+        "v2 (SET_CORE_OPTIONS_V2)",
+    };
+    int options_api = static_cast<int>(app->options_version);
+    if (ImGui::Combo("Options API", &options_api, OPTIONS_API_NAMES, 3))
+    {
+        uint32_t new_version = static_cast<uint32_t>(options_api);
+        if (new_version != app->options_version)
+        {
+            app->options_version = new_version;
+            if (core_running(app) || app->host->core.library.handle != nullptr)
+            {
+                core_stop(app);
+                set_status(app, "Options API changed to v%u: core unloaded, press Start", new_version);
+            }
+        }
+    }
+    ImGui::SetItemTooltip("Which core options version we report to the core. Lower versions make it use its "
+                          "older options code. Changing it unloads the core.");
 
     if (ImGui::Button("Start"))
     {
@@ -394,10 +433,182 @@ static void draw_controls_window(App* app)
     ImGui::End();
 }
 
+// ---------------------------------------------------------------------------
+// Core options window
+// ---------------------------------------------------------------------------
+
+static const char* option_value_text(const LibretroOption* option, uint32_t index)
+{
+    return option->value_labels[index] != nullptr ? option->value_labels[index] : option->values[index];
+}
+
+// One drop-down. Choosing a value hands it to the host; the core picks it up
+// on its next GET_VARIABLE_UPDATE (normally during the next frame).
+static void draw_option(App* app, const LibretroOption* option, bool inside_category)
+{
+    const char* label = inside_category && option->label_in_category != nullptr ? option->label_in_category : option->label;
+
+    ImGui::PushID(option->key);
+    if (ImGui::BeginCombo(label, option_value_text(option, option->current_index)))
+    {
+        for (uint32_t i = 0; i < option->value_count; i++)
+        {
+            bool selected = i == option->current_index;
+            if (ImGui::Selectable(option_value_text(option, i), selected))
+            {
+                libretro_host_set_option(app->host, option->key, option->values[i]);
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    // Key and info text on hover: the key is what shows up in logs and GET_VARIABLE.
+    ImGui::SetItemTooltip("%s%s%s", option->key, option->info != nullptr ? "\n\n" : "",
+                          option->info != nullptr ? option->info : "");
+    ImGui::PopID();
+}
+
+static bool category_exists(const LibretroOptions* options, const char* key)
+{
+    for (uint32_t i = 0; key != nullptr && i < options->category_count; i++)
+    {
+        if (std::strcmp(options->categories[i].key, key) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void draw_options_window(App* app)
+{
+    const LibretroOptions* options = &app->host->options;
+
+    ImGui::SetNextWindowPos(ImVec2(20.0f, 600.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Core options");
+
+    if (app->host->core.library.handle == nullptr)
+    {
+        ImGui::TextUnformatted("No core loaded.");
+        ImGui::End();
+        return;
+    }
+    if (options->count == 0)
+    {
+        ImGui::TextUnformatted("The core declared no options.");
+        ImGui::End();
+        return;
+    }
+
+    uint32_t hidden = 0;
+    for (uint32_t i = 0; i < options->count; i++)
+    {
+        hidden += options->options[i].visible ? 0u : 1u;
+    }
+    ImGui::Text("%u options, declared with API v%u (we report v%u)%s", options->count, options->api_used,
+                app->host->core_options_version, hidden > 0 ? "," : "");
+    if (hidden > 0)
+    {
+        ImGui::SameLine();
+        ImGui::Text("%u hidden by the core", hidden);
+    }
+    if (ImGui::Button("Reset to defaults"))
+    {
+        for (uint32_t i = 0; i < options->count; i++)
+        {
+            const LibretroOption* option = &options->options[i];
+            libretro_host_set_option(app->host, option->key, option->values[option->default_index]);
+        }
+    }
+    ImGui::Separator();
+
+    // Options without a (known) category first, then one section per category.
+    for (uint32_t i = 0; i < options->count; i++)
+    {
+        const LibretroOption* option = &options->options[i];
+        if (option->visible && !category_exists(options, option->category_key))
+        {
+            draw_option(app, option, false);
+        }
+    }
+    for (uint32_t c = 0; c < options->category_count; c++)
+    {
+        const LibretroOptionCategory* category = &options->categories[c];
+        ImGui::PushID(category->key);
+        bool open = ImGui::CollapsingHeader(category->label, ImGuiTreeNodeFlags_DefaultOpen);
+        if (category->info != nullptr)
+        {
+            ImGui::SetItemTooltip("%s", category->info);
+        }
+        if (open)
+        {
+            for (uint32_t i = 0; i < options->count; i++)
+            {
+                const LibretroOption* option = &options->options[i];
+                if (option->visible && option->category_key != nullptr && std::strcmp(option->category_key, category->key) == 0)
+                {
+                    draw_option(app, option, true);
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::End();
+}
+
+static bool same_geometry(const retro_game_geometry* a, const retro_game_geometry* b)
+{
+    return a->base_width == b->base_width && a->base_height == b->base_height && a->aspect_ratio == b->aspect_ratio;
+}
+
+// Like RetroArch's windowed mode: the window's image area is the core's base
+// size times the largest whole scale that fits on screen. The picture inside is
+// still drawn at the core's aspect ratio, so e.g. 720x480 at 4:3 gets side bars.
+static void size_video_window_for_geometry(App* app)
+{
+    const retro_game_geometry* geometry = &app->host->av_info.geometry;
+    if (!core_running(app) || geometry->base_width == 0 || geometry->base_height == 0 ||
+        same_geometry(geometry, &app->video_window_geometry))
+    {
+        return;
+    }
+    app->video_window_geometry = *geometry;
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    float chrome_width = style.WindowPadding.x * 2.0f;
+    float chrome_height = style.WindowPadding.y * 2.0f + ImGui::GetFrameHeight();   // + title bar
+
+    // Room to the right of / below where the window starts, inside the SDL window.
+    ImVec2 screen = ImGui::GetMainViewport()->WorkSize;
+    float room_width = screen.x - 500.0f - 20.0f - chrome_width;
+    float room_height = screen.y - 20.0f - 20.0f - chrome_height;
+
+    float base_width = static_cast<float>(geometry->base_width);
+    float base_height = static_cast<float>(geometry->base_height);
+    uint32_t scale = 1;
+    while (base_width * static_cast<float>(scale + 1) <= room_width &&
+           base_height * static_cast<float>(scale + 1) <= room_height)
+    {
+        scale++;
+    }
+
+    float scale_factor = static_cast<float>(scale);
+    ImGui::SetNextWindowSize(ImVec2(base_width * scale_factor + chrome_width, base_height * scale_factor + chrome_height),
+                             ImGuiCond_Always);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Video window: %ux%u x%u (core geometry changed)", geometry->base_width,
+                geometry->base_height, scale);
+}
+
 static void draw_video_window(App* app)
 {
     ImGui::SetNextWindowPos(ImVec2(500.0f, 20.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(700.0f, 560.0f), ImGuiCond_FirstUseEver);
+    size_video_window_for_geometry(app);   // overrides the size above when the geometry changed
     ImGui::Begin("Video");
 
     app->image_area.visible = false;
@@ -488,6 +699,7 @@ static void handle_events(App* app)
     while (SDL_PollEvent(&event))
     {
         app_shell_process_event(&app->shell, &event);
+        fixed_input_handle_event(&app->fixed_input, &event, !ImGui::GetIO().WantTextInput, app->gamepad);
 
         switch (event.type)
         {
@@ -585,6 +797,7 @@ int main(int argc, char** argv)
                 // destroy the core texture, so the video window (which puts that texture
                 // into this frame's draw list) must be built AFTER it.
                 draw_controls_window(app);
+                draw_options_window(app);
                 draw_video_window(app);
                 upload_core_video(app);
                 if (!app_shell_present(&app->shell, CLEAR_COLOR))

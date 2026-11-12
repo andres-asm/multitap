@@ -61,7 +61,34 @@ static uint16_t button_bit(unsigned button)
     return static_cast<uint16_t>(1u << button);
 }
 
-void fixed_input_read(LibretroInputState* input, bool keyboard_enabled, SDL_Gamepad* gamepad)
+void fixed_input_handle_event(FixedInput* fixed, const SDL_Event* event, bool keyboard_enabled, SDL_Gamepad* gamepad)
+{
+    if (event->type == SDL_EVENT_KEY_DOWN && keyboard_enabled && !event->key.repeat)
+    {
+        for (size_t i = 0; i < KEY_BINDING_COUNT; i++)
+        {
+            if (KEY_BINDINGS[i].key == event->key.scancode)
+            {
+                fixed->pressed_since_last_read = static_cast<uint16_t>(fixed->pressed_since_last_read | button_bit(KEY_BINDINGS[i].button));
+            }
+        }
+        return;
+    }
+
+    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && gamepad != nullptr && event->gbutton.which == SDL_GetGamepadID(gamepad))
+    {
+        for (size_t i = 0; i < GAMEPAD_BINDING_COUNT; i++)
+        {
+            if (static_cast<uint8_t>(GAMEPAD_BINDINGS[i].gamepad_button) == event->gbutton.button)
+            {
+                fixed->pressed_since_last_read = static_cast<uint16_t>(fixed->pressed_since_last_read | button_bit(GAMEPAD_BINDINGS[i].button));
+            }
+        }
+    }
+    // Triggers (L2/R2) are axes: they move gradually, so a press can't fall between two reads.
+}
+
+void fixed_input_read(FixedInput* fixed, LibretroInputState* input, bool keyboard_enabled, SDL_Gamepad* gamepad)
 {
     // Pointer fields are filled by the caller (they depend on where the image is drawn).
     for (unsigned port = 0; port < LIBRETRO_MAX_PORTS; port++)
@@ -114,6 +141,10 @@ void fixed_input_read(LibretroInputState* input, bool keyboard_enabled, SDL_Game
         input->analog[0][RETRO_DEVICE_INDEX_ANALOG_RIGHT][RETRO_DEVICE_ID_ANALOG_X] = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX);
         input->analog[0][RETRO_DEVICE_INDEX_ANALOG_RIGHT][RETRO_DEVICE_ID_ANALOG_Y] = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY);
     }
+
+    // A press that was already released by now still counts for this one frame.
+    buttons = static_cast<uint16_t>(buttons | fixed->pressed_since_last_read);
+    fixed->pressed_since_last_read = 0;
 
     input->joypad_buttons[0] = buttons;
 }

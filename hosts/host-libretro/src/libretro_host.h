@@ -24,6 +24,7 @@
 #include "libretro.h"
 #include "libretro_audio.h"
 #include "libretro_core.h"
+#include "libretro_options.h"
 #include "libretro_video.h"
 
 constexpr size_t LIBRETRO_PATH_MAX = 4096;
@@ -62,7 +63,15 @@ struct LibretroHostConfig
 {
     const char* system_directory = "";
     const char* save_directory   = "";
+
+    // Highest core options version we tell the core about (GET_CORE_OPTIONS_VERSION):
+    // 2 = v2, 1 = v1, 0 = don't answer at all, like a frontend from before
+    // options existed. It only changes what the core THINKS we support (so its
+    // v1/v0 fallbacks can be tested); every format is accepted regardless.
+    uint32_t core_options_version = 2;
 };
+
+constexpr uint32_t LIBRETRO_CORE_OPTIONS_VERSION_MAX = 2;
 
 struct LibretroHost
 {
@@ -93,6 +102,12 @@ struct LibretroHost
     LibretroInputState  input = {};
     LibretroHostStats  stats = {};
 
+    // Core options (libretro_options.h). Declared by the core in retro_set_environment,
+    // kept until the core is unloaded. Frontends read this list and change values
+    // with libretro_host_set_option().
+    LibretroOptions options              = {};
+    uint32_t        core_options_version = 2;   // copied from the config at load
+
     // What the core asked for through the environment callback.
     retro_pixel_format pixel_format       = RETRO_PIXEL_FORMAT_0RGB1555;   // libretro's default
     bool               supports_no_game   = false;
@@ -111,6 +126,11 @@ bool libretro_host_load_game(LibretroHost* host, const char* content_path);
 
 // Replaces the input the core will see on its next input_state calls.
 void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input);
+
+// Changes a core option. The core sees it on its next GET_VARIABLE_UPDATE /
+// GET_VARIABLE (usually during the next retro_run). Fails (logged) for an
+// unknown key or a value that isn't one of the option's values.
+bool libretro_host_set_option(LibretroHost* host, const char* key, const char* value);
 
 // Runs one frame (retro_run). Needs a loaded game. Returns false if nothing
 // could run (no game, or the core asked to shut down). Afterwards host->audio

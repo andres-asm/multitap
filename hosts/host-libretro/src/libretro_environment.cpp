@@ -254,7 +254,8 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
             host->av_info.geometry.base_width   = geometry->base_width;
             host->av_info.geometry.base_height  = geometry->base_height;
             host->av_info.geometry.aspect_ratio = geometry->aspect_ratio;
-            std::snprintf(note, note_size, "%ux%u", geometry->base_width, geometry->base_height);
+            std::snprintf(note, note_size, "%ux%u, aspect %.4f", geometry->base_width, geometry->base_height,
+                          static_cast<double>(geometry->aspect_ratio));
             return EnvironmentResult::handled;
         }
 
@@ -302,7 +303,106 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
             return EnvironmentResult::handled;
         }
 
-        // --- Core options (not implemented yet) -----------------------------
+        // --- Core options (libretro_options.h) ------------------------------
+        //
+        // Every format is accepted whatever version we report: the reported
+        // version only steers which one the core picks (see LibretroHostConfig).
+
+        case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION:
+        {
+            if (host->core_options_version == 0)
+            {
+                // Pretending to be a frontend from before options v1: it wouldn't know this command.
+                std::snprintf(note, note_size, "not answered (configured as a v0 frontend)");
+                return EnvironmentResult::not_supported;
+            }
+            if (data == nullptr)
+            {
+                return null_data(note, note_size);
+            }
+            *static_cast<unsigned*>(data) = host->core_options_version;
+            std::snprintf(note, note_size, "%u", host->core_options_version);
+            return EnvironmentResult::handled;
+        }
+
+        case RETRO_ENVIRONMENT_SET_VARIABLES:
+        {
+            if (data == nullptr)
+            {
+                return null_data(note, note_size);
+            }
+            if (!libretro_options_register_v0(&host->options, static_cast<const retro_variable*>(data)))
+            {
+                std::snprintf(note, note_size, "unusable definitions (see above)");
+                return EnvironmentResult::rejected;
+            }
+            std::snprintf(note, note_size, "%u options (v0)", host->options.count);
+            return EnvironmentResult::handled;
+        }
+
+        case RETRO_ENVIRONMENT_SET_CORE_OPTIONS:
+        case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL:
+        {
+            if (data == nullptr)
+            {
+                return null_data(note, note_size);
+            }
+            // _INTL: English ("us") only for now; translations ("local") are ignored.
+            const retro_core_option_definition* definitions =
+                command == RETRO_ENVIRONMENT_SET_CORE_OPTIONS
+                    ? static_cast<const retro_core_option_definition*>(data)
+                    : static_cast<const retro_core_options_intl*>(data)->us;
+            if (definitions == nullptr || !libretro_options_register_v1(&host->options, definitions))
+            {
+                std::snprintf(note, note_size, "unusable definitions");
+                return EnvironmentResult::rejected;
+            }
+            std::snprintf(note, note_size, "%u options (v1)", host->options.count);
+            return EnvironmentResult::handled;
+        }
+
+        case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2:
+        case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2_INTL:
+        {
+            // libretro.h: NULL here is valid and means "remove all options".
+            const retro_core_options_v2* definitions = nullptr;
+            if (data != nullptr)
+            {
+                definitions = command == RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2
+                                  ? static_cast<const retro_core_options_v2*>(data)
+                                  : static_cast<const retro_core_options_v2_intl*>(data)->us;
+            }
+            if (definitions == nullptr)
+            {
+                libretro_options_free(&host->options);
+                std::snprintf(note, note_size, "all options removed");
+                return EnvironmentResult::handled;
+            }
+            if (!libretro_options_register_v2(&host->options, definitions))
+            {
+                std::snprintf(note, note_size, "unusable definitions");
+                return EnvironmentResult::rejected;
+            }
+            std::snprintf(note, note_size, "%u options, %u categories (v2)", host->options.count,
+                          host->options.category_count);
+            return EnvironmentResult::handled;
+        }
+
+        case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY:
+        {
+            if (data == nullptr)
+            {
+                return null_data(note, note_size);
+            }
+            const retro_core_option_display* display = static_cast<const retro_core_option_display*>(data);
+            if (display->key == nullptr || !libretro_options_set_visible(&host->options, display->key, display->visible))
+            {
+                std::snprintf(note, note_size, "unknown option %s", display->key != nullptr ? display->key : "(null)");
+                return EnvironmentResult::rejected;
+            }
+            std::snprintf(note, note_size, "%s %s", display->key, display->visible ? "shown" : "hidden");
+            return EnvironmentResult::handled;
+        }
 
         case RETRO_ENVIRONMENT_GET_VARIABLE:
         {
@@ -311,10 +411,15 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
                 return null_data(note, note_size);
             }
             retro_variable* variable = static_cast<retro_variable*>(data);
-            std::snprintf(note, note_size, "%s (options not implemented yet)",
-                          variable->key != nullptr ? variable->key : "?");
-            variable->value = nullptr;
-            return EnvironmentResult::not_supported;
+            variable->value = libretro_options_get(&host->options, variable->key);
+            if (variable->value == nullptr)
+            {
+                // Not a core bug as such (it may ask before declaring), but worth seeing.
+                std::snprintf(note, note_size, "%s: unknown option", variable->key != nullptr ? variable->key : "(null)");
+                return EnvironmentResult::not_supported;
+            }
+            std::snprintf(note, note_size, "%s = %s", variable->key, variable->value);
+            return EnvironmentResult::handled;
         }
 
         case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
@@ -323,7 +428,9 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
             {
                 return null_data(note, note_size);
             }
-            *static_cast<bool*>(data) = false;
+            bool updated = libretro_options_take_update(&host->options);
+            *static_cast<bool*>(data) = updated;
+            std::snprintf(note, note_size, "%s", updated ? "yes" : "no");
             return EnvironmentResult::handled;
         }
 

@@ -154,9 +154,15 @@ void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frame
 
     // Ran dry: the device played everything we had and is now playing silence
     // (an audible gap). Start again with a cushion so we don't hit it next frame.
+    // During the warm-up (slow first frames of a core) the refill happens but isn't counted.
+    bool warming_up = output->pushes < AUDIO_OUTPUT_WARMUP_PUSHES;
+    if (output->pushes < UINT32_MAX)
+    {
+        output->pushes++;
+    }
     if (queued == 0)
     {
-        if (output->started)
+        if (output->started && !warming_up)
         {
             output->underruns++;
             // Logged one by one: the timing pattern tells drift (evenly spaced)
@@ -171,7 +177,8 @@ void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frame
     output->started = true;
 
     // Too far ahead (display faster than the core, or a burst of frames):
-    // dropping this block keeps latency bounded. It's a small click, rarely.
+    // dropping this block keeps latency bounded at the cost of a click (see the
+    // header for how often that happens away from the core's fps).
     if (frames_to_ms(queued, output->sample_rate) > AUDIO_OUTPUT_MAX_QUEUED_MS)
     {
         output->dropped_frames += frames;
@@ -190,6 +197,7 @@ void audio_output_clear(AudioOutput* output)
     SDL_ClearAudioStream(output->stream);
     // Not an underrun when we start pushing again: the gap was on purpose.
     output->started = false;
+    output->pushes = 0;
 }
 
 uint32_t audio_output_queued_ms(const AudioOutput* output)

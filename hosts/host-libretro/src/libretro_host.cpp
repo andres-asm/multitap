@@ -310,6 +310,10 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
         return false;
     }
 
+    // Before set_environment: cores ask GET_CORE_OPTIONS_VERSION from inside it.
+    host->core_options_version = config->core_options_version <= LIBRETRO_CORE_OPTIONS_VERSION_MAX
+                                     ? config->core_options_version : LIBRETRO_CORE_OPTIONS_VERSION_MAX;
+
     host_log(LogLevel::info, "Loading core %s", host->core_path);
     if (!libretro_core_load(&host->core, host->core_path))
     {
@@ -371,6 +375,9 @@ void libretro_host_unload_core(LibretroHost* host)
         host_log(LogLevel::info, "Unloading core %s", host->core_path);
         libretro_core_unload(&host->core);
     }
+
+    // The option list was declared by this core; it goes with it.
+    libretro_options_free(&host->options);
 
     // Back to a clean state so the same LibretroHost can load another core.
     *host = LibretroHost{};
@@ -489,6 +496,11 @@ void libretro_host_unload_game(LibretroHost* host)
 void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input)
 {
     host->input = *input;
+}
+
+bool libretro_host_set_option(LibretroHost* host, const char* key, const char* value)
+{
+    return libretro_options_set(&host->options, key, value);
 }
 
 bool libretro_host_run_frame(LibretroHost* host)

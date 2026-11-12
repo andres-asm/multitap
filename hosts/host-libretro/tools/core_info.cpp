@@ -4,7 +4,8 @@
 // everything cleanly. A development tool for testing the host, not a frontend.
 //
 // Usage:
-//   libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR] <core> [content]
+//   libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]
+//                      [--options-version N] [--set KEY=VALUE]... <core> [content]
 //
 // Without content, cores that support it are started with no game.
 
@@ -18,16 +19,49 @@
 static void print_usage()
 {
     std::fprintf(stderr,
-                 "usage: libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR] <core> [content]\n"
-                 "  --verbose     also log repeated environment calls and core debug output\n"
-                 "  --frames N    run N frames after loading (headless, no input)\n"
-                 "  --system DIR  directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
-                 "  --save DIR    directory returned for GET_SAVE_DIRECTORY (default: none)\n");
+                 "usage: libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]\n"
+                 "                          [--options-version N] [--set KEY=VALUE]... <core> [content]\n"
+                 "  --verbose            also log repeated environment calls and core debug output\n"
+                 "  --frames N           run N frames after loading (headless, no input)\n"
+                 "  --system DIR         directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
+                 "  --save DIR           directory returned for GET_SAVE_DIRECTORY (default: none)\n"
+                 "  --options-version N  core options version to report: 2, 1 or 0 (default 2)\n"
+                 "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n");
 }
+
+// Prints every option the core declared, one line each, in a fixed format that
+// tests can match: "Option KEY = VALUE (v1|v2|...) [category] [hidden]".
+static void print_options(const LibretroOptions* options)
+{
+    host_log(LogLevel::info, "Options: %u declared with API v%u, %u categories", options->count, options->api_used,
+             options->category_count);
+    for (uint32_t i = 0; i < options->count; i++)
+    {
+        const LibretroOption* option = &options->options[i];
+        char values[512] = {};
+        size_t used = 0;
+        for (uint32_t v = 0; v < option->value_count && used < sizeof(values); v++)
+        {
+            int written = std::snprintf(values + used, sizeof(values) - used, "%s%s", v > 0 ? "|" : "", option->values[v]);
+            if (written < 0)
+            {
+                break;
+            }
+            used += static_cast<size_t>(written);
+        }
+        host_log(LogLevel::info, "Option %s = %s (%s)%s%s%s%s", option->key, option->values[option->current_index], values,
+                 option->category_key != nullptr ? " [" : "", option->category_key != nullptr ? option->category_key : "",
+                 option->category_key != nullptr ? "]" : "", option->visible ? "" : " [hidden]");
+    }
+}
+
+constexpr int MAX_OPTION_SETS = 16;
 
 int main(int argc, char** argv)
 {
     LibretroHostConfig config = {};
+    const char* option_sets[MAX_OPTION_SETS] = {};
+    int option_set_count = 0;
     const char* core_path = nullptr;
     const char* content_path = nullptr;
     unsigned long frames_to_run = 0;
@@ -54,6 +88,17 @@ int main(int argc, char** argv)
         {
             i++;
             config.save_directory = argv[i];
+        }
+        else if (std::strcmp(argument, "--options-version") == 0 && i + 1 < argc)
+        {
+            i++;
+            config.core_options_version = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+        }
+        else if (std::strcmp(argument, "--set") == 0 && i + 1 < argc && option_set_count < MAX_OPTION_SETS)
+        {
+            i++;
+            option_sets[option_set_count] = argv[i];
+            option_set_count++;
         }
         else if (argument[0] == '-')
         {
@@ -99,6 +144,30 @@ int main(int argc, char** argv)
     else
     {
         host_log(LogLevel::info, "No content given and the core needs content: skipping retro_load_game");
+    }
+
+    if (host->core.library.handle != nullptr)
+    {
+        print_options(&host->options);
+    }
+
+    // --set KEY=VALUE: like a user changing an option in a menu while the game runs.
+    for (int i = 0; exit_code == 0 && i < option_set_count; i++)
+    {
+        char key[256] = {};
+        const char* equals = std::strchr(option_sets[i], '=');
+        size_t key_length = equals != nullptr ? static_cast<size_t>(equals - option_sets[i]) : 0;
+        if (equals == nullptr || key_length == 0 || key_length >= sizeof(key))
+        {
+            host_log(LogLevel::error, "--set needs KEY=VALUE, got '%s'", option_sets[i]);
+            exit_code = 2;
+            break;
+        }
+        std::memcpy(key, option_sets[i], key_length);
+        if (!libretro_host_set_option(host, key, equals + 1))
+        {
+            exit_code = 1;
+        }
     }
 
     if (exit_code == 0 && host->game_loaded && frames_to_run > 0)
