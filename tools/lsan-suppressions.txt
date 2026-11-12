@@ -1,0 +1,18 @@
+# LeakSanitizer suppressions for leaks that are NOT in our code.
+#
+# Use:  LSAN_OPTIONS=suppressions=tools/lsan-suppressions.txt ./build-asan/...
+#
+# Every entry names a third-party function and why it's here. Never add a
+# pattern that could match our own code (frontends/, hosts/).
+
+# SDL3's X11 driver: the X input method (XOpenIM / XIM) and XRandR lookups made
+# during SDL_Init are never freed by Xlib. Seen on Xvfb and X11 sessions, also
+# in piccolo with nothing but SDL_Init + SDL_Quit.
+leak:X11_InitIM
+leak:X11_GetGlobalContentScale
+leak:X11_AddXRandRDisplay
+
+# Known and NOT suppressible: with Mesa's software Vulkan driver (lavapipe /
+# llvmpipe) LeakSanitizer reports 2 x 56 bytes from a driver thread. The driver
+# is unloaded by vkDestroyInstance, so its frames show as "<unknown module>" and
+# can't be matched here. Piccolo (no core, no host) shows the same 112 bytes.
