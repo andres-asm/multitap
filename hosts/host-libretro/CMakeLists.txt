@@ -111,36 +111,36 @@ if(MULTITAP_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION "Option test_core_speed = normal \\(normal\\|fast\\)"
         FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}")
 
-    # The interactive test wizard core lives in its own repo, pulled in as a
+    # The interactive libretro test core (test_libretro) lives in its own repo, pulled in as a
     # submodule. Built when present. Its pages need a human, so CTest only runs a
     # headless smoke test with it (below); the full walk-through is manual.
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test-libretro/CMakeLists.txt")
         add_subdirectory(test-libretro)
 
-        # Headless smoke test: 120 frames of the wizard (environment page) through the host.
+        # Headless smoke test: 120 frames of libretro test (environment page) through the host.
         # Checks retro_run, video copy/conversion and the input path under the sanitizers.
-        add_test(NAME host_libretro_wizard_runs
-                 COMMAND libretro_core_info --frames 120 $<TARGET_FILE:test_wizard_libretro>)
-        set_tests_properties(host_libretro_wizard_runs PROPERTIES
+        add_test(NAME host_libretro_test_libretro_runs
+                 COMMAND libretro_core_info --frames 120 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_test_libretro_runs PROPERTIES
             PASS_REGULAR_EXPRESSION "Ran 120 frames: 120 video frames \\(640x480\\)"
             FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
 
-        # Core options through each API the wizard can pick (it follows the version
+        # Core options through each API libretro test can pick (it follows the version
         # we report), then a width change at runtime: the core must re-read its
         # options, send SET_GEOMETRY and produce 720x480 frames.
         foreach(_version 2 1 0)
-            add_test(NAME host_libretro_wizard_options_v${_version}
+            add_test(NAME host_libretro_test_libretro_options_v${_version}
                      COMMAND libretro_core_info --options-version ${_version} --frames 10
-                             --set testwizard_width=720 $<TARGET_FILE:test_wizard_libretro>)
-            set_tests_properties(host_libretro_wizard_options_v${_version} PROPERTIES
-                PASS_REGULAR_EXPRESSION "Options: 2 declared with API v${_version}.*Option testwizard_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
+                             --set libretro_test_width=720 $<TARGET_FILE:test_libretro>)
+            set_tests_properties(host_libretro_test_libretro_options_v${_version} PROPERTIES
+                PASS_REGULAR_EXPRESSION "Options: 2 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
                 FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
         endforeach()
 
         # A value that isn't one of the option's values must be refused.
         add_test(NAME host_libretro_option_bad_value
-                 COMMAND libretro_core_info --set testwizard_width=800 $<TARGET_FILE:test_wizard_libretro>)
+                 COMMAND libretro_core_info --set libretro_test_width=800 $<TARGET_FILE:test_libretro>)
         set_tests_properties(host_libretro_option_bad_value PROPERTIES
-            PASS_REGULAR_EXPRESSION "testwizard_width: '800' is not one of its values")
+            PASS_REGULAR_EXPRESSION "libretro_test_width: '800' is not one of its values")
     endif()
 endif()
