@@ -13,8 +13,8 @@
 //          Audio plays at its own rate. Later the natural mode for
 //          FreeSync/G-Sync displays.
 //
-// For now this lives in the test frontend; it moves into the host when
-// piccolo needs the same frame loop.
+// Shared by every frontend (frontend_common). It may move into the host later,
+// with the rest of the frame loop.
 
 #include <cstdint>
 

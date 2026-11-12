@@ -21,12 +21,8 @@ multitap_set_project_flags(host_libretro)
 # cores and check that every libretro function works. Not meant for playing.
 add_executable(libretro_test_frontend
     frontend/main.cpp
-    frontend/fixed_input.cpp
-    frontend/keyboard_input.cpp
-    frontend/frame_timing.cpp
-    frontend/core_catalog.cpp
 )
-target_link_libraries(libretro_test_frontend PRIVATE host_libretro frontend_common)
+target_link_libraries(libretro_test_frontend PRIVATE frontend_libretro)
 multitap_set_project_flags(libretro_test_frontend)
 multitap_copy_after_build(libretro_test_frontend "${MULTITAP_BIN_DIR}")
 

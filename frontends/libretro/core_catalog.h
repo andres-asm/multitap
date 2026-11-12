@@ -47,5 +47,10 @@ void core_catalog_init(CoreCatalog* catalog, const char* directory, const char* 
 // is never peeked (it's the same library), its info is taken from the host.
 void core_catalog_scan(CoreCatalog* catalog, const LibretroHost* running);
 
+// Forgets every cached result and scans again, peeking every core (except
+// the running one). For when a core changed in a way size + mtime can't see,
+// or to rule out a stale cache.
+void core_catalog_refresh(CoreCatalog* catalog, const LibretroHost* running);
+
 // "<directory>/<file_name>". False if it doesn't fit.
 bool core_catalog_path(const CoreCatalog* catalog, const CoreCatalogEntry* entry, char* out, size_t out_size);

@@ -307,3 +307,9 @@ void core_catalog_scan(CoreCatalog* catalog, const LibretroHost* running)
                     catalog->count, catalog->peeked_last_scan, catalog->cache_path);
     }
 }
+
+void core_catalog_refresh(CoreCatalog* catalog, const LibretroHost* running)
+{
+    catalog->count = 0;   // nothing cached: every core gets peeked
+    core_catalog_scan(catalog, running);
+}
