@@ -91,6 +91,53 @@ static void copy_path(char* destination, size_t size, const char* source)
     std::snprintf(destination, size, "%s", source);
 }
 
+// What the user typed into a path field, made loadable:
+//   - surrounding spaces and one pair of matching quotes removed (paths copied
+//     from a file manager or a shell often come quoted);
+//   - a leading "~" or "~/" replaced by the home folder. Only shells expand "~";
+//     dlopen/fopen would look for a folder literally named "~".
+// Returns false (and leaves `out` empty) if the result doesn't fit.
+static bool resolve_user_path(const char* typed, char* out, size_t out_size)
+{
+    out[0] = '\0';
+    size_t start = 0;
+    size_t end = std::strlen(typed);
+    while (start < end && (typed[start] == ' ' || typed[start] == '\t'))
+    {
+        start++;
+    }
+    while (end > start && (typed[end - 1] == ' ' || typed[end - 1] == '\t' || typed[end - 1] == '\n' || typed[end - 1] == '\r'))
+    {
+        end--;
+    }
+    if (end - start >= 2 && (typed[start] == '"' || typed[start] == '\'') && typed[end - 1] == typed[start])
+    {
+        start++;
+        end--;
+    }
+
+    const char* home = "";
+    if (end > start && typed[start] == '~' && (end - start == 1 || typed[start + 1] == '/'))
+    {
+        // SDL_GetUserFolder works on every platform (HOME isn't set on Windows)
+        // and returns the folder WITH a trailing separator.
+        const char* folder = SDL_GetUserFolder(SDL_FOLDER_HOME);
+        if (folder != nullptr)
+        {
+            home = folder;
+            start += end - start == 1 ? 1 : 2;   // drop "~" or "~/"
+        }
+    }
+
+    int written = std::snprintf(out, out_size, "%s%.*s", home, static_cast<int>(end - start), typed + start);
+    if (written < 0 || static_cast<size_t>(written) >= out_size)
+    {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 static bool ends_with(const char* text, const char* suffix)
 {
     size_t text_length = std::strlen(text);
@@ -190,15 +237,25 @@ static void core_start(App* app)
         return;
     }
 
-    LibretroHostConfig config = {};
-    config.core_options_version = app->options_version;
-    if (!libretro_host_load_core(app->host, app->core_path, &config))
+    // The fields keep what the user typed; these are what we actually load.
+    char core_path[LIBRETRO_PATH_MAX] = {};
+    char content_path[LIBRETRO_PATH_MAX] = {};
+    if (!resolve_user_path(app->core_path, core_path, sizeof(core_path)) ||
+        !resolve_user_path(app->content_path, content_path, sizeof(content_path)))
     {
-        set_status(app, "Could not load the core (see the log)");
+        set_status(app, "Path too long");
         return;
     }
 
-    const char* content = app->content_path[0] != '\0' ? app->content_path : nullptr;
+    LibretroHostConfig config = {};
+    config.core_options_version = app->options_version;
+    if (!libretro_host_load_core(app->host, core_path, &config))
+    {
+        set_status(app, "Could not load the core %s (see the log)", core_path);
+        return;
+    }
+
+    const char* content = content_path[0] != '\0' ? content_path : nullptr;
     if (!libretro_host_load_game(app->host, content))
     {
         set_status(app, "The core could not start%s (see the log)", content != nullptr ? " this content" : " without content");
