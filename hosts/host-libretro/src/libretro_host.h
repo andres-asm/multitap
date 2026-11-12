@@ -31,6 +31,9 @@ constexpr size_t LIBRETRO_PATH_MAX = 4096;
 
 constexpr unsigned LIBRETRO_MAX_PORTS = 4;
 
+// Savestate slots 0..LIBRETRO_STATE_SLOTS-1, one file each.
+constexpr uint32_t LIBRETRO_STATE_SLOTS = 10;
+
 // RETRO_DEVICE_KEYBOARD key states are indexed by RETROK_* code.
 constexpr unsigned LIBRETRO_KEY_COUNT = RETROK_LAST;
 
@@ -148,6 +151,16 @@ void libretro_host_set_input(LibretroHost* host, const LibretroInputState* input
 // Also done automatically when the game is unloaded; call this too every so
 // often so a crash loses little. Returns false if anything failed (logged).
 bool libretro_host_save_memory(LibretroHost* host);
+
+// Savestates: retro_serialize into <data>/states/<core>/<game>.state<slot>,
+// and back with retro_unserialize. Call between frames. Return false if the
+// core can't (serialize size 0), the slot is out of range, there's no data
+// directory, or a file operation failed; the reason is logged.
+bool libretro_host_save_state(LibretroHost* host, uint32_t slot);
+bool libretro_host_load_state(LibretroHost* host, uint32_t slot);
+
+// The file a slot uses (whether or not it exists yet). False if there's no data directory.
+bool libretro_host_state_path(const LibretroHost* host, uint32_t slot, char* out, size_t out_size);
 
 // Forwards one key event to the core's keyboard callback, if it registered
 // one (SET_KEYBOARD_CALLBACK). keycode = RETROK_*, character = the UTF-32

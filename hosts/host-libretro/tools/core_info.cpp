@@ -5,7 +5,8 @@
 //
 // Usage:
 //   libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]
-//                      [--options-version N] [--data-dir DIR] [--set KEY=VALUE]... <core> [content]
+//                      [--options-version N] [--data-dir DIR] [--load-state N] [--save-state N]
+//                      [--set KEY=VALUE]... <core> [content]
 //
 // Without content, cores that support it are started with no game.
 
@@ -20,13 +21,16 @@ static void print_usage()
 {
     std::fprintf(stderr,
                  "usage: libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]\n"
-                 "                          [--options-version N] [--data-dir DIR] [--set KEY=VALUE]... <core> [content]\n"
+                 "                          [--options-version N] [--data-dir DIR] [--load-state N] [--save-state N]\n"
+                 "                          [--set KEY=VALUE]... <core> [content]\n"
                  "  --verbose            also log repeated environment calls and core debug output\n"
                  "  --frames N           run N frames after loading (headless, no input)\n"
                  "  --system DIR         directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
                  "  --save DIR           directory returned for GET_SAVE_DIRECTORY (default: none)\n"
                  "  --options-version N  core options version to report: 2, 1 or 0 (default 2)\n"
                  "  --data-dir DIR       where the host keeps SRAM and savestates (default: none)\n"
+                 "  --load-state N       load savestate slot N before running frames\n"
+                 "  --save-state N       save savestate slot N after running frames\n"
                  "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n");
 }
 
@@ -62,6 +66,8 @@ int main(int argc, char** argv)
 {
     LibretroHostConfig config = {};
     const char* option_sets[MAX_OPTION_SETS] = {};
+    long load_state_slot = -1;   // -1 = don't
+    long save_state_slot = -1;
     int option_set_count = 0;
     const char* core_path = nullptr;
     const char* content_path = nullptr;
@@ -94,6 +100,16 @@ int main(int argc, char** argv)
         {
             i++;
             config.core_options_version = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+        }
+        else if (std::strcmp(argument, "--load-state") == 0 && i + 1 < argc)
+        {
+            i++;
+            load_state_slot = static_cast<long>(std::strtol(argv[i], nullptr, 10));
+        }
+        else if (std::strcmp(argument, "--save-state") == 0 && i + 1 < argc)
+        {
+            i++;
+            save_state_slot = static_cast<long>(std::strtol(argv[i], nullptr, 10));
         }
         else if (std::strcmp(argument, "--data-dir") == 0 && i + 1 < argc)
         {
@@ -176,6 +192,12 @@ int main(int argc, char** argv)
         }
     }
 
+    if (exit_code == 0 && host->game_loaded && load_state_slot >= 0 &&
+        !libretro_host_load_state(host, static_cast<uint32_t>(load_state_slot)))
+    {
+        exit_code = 1;
+    }
+
     if (exit_code == 0 && host->game_loaded && frames_to_run > 0)
     {
         unsigned long frame = 0;
@@ -197,6 +219,12 @@ int main(int argc, char** argv)
         {
             exit_code = 1;
         }
+    }
+
+    if (exit_code == 0 && host->game_loaded && save_state_slot >= 0 &&
+        !libretro_host_save_state(host, static_cast<uint32_t>(save_state_slot)))
+    {
+        exit_code = 1;
     }
 
     libretro_host_unload_core(host);

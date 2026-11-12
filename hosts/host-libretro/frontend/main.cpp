@@ -21,6 +21,7 @@
 #include "audio_output.h"
 #include "debug_ui.h"
 #include "fixed_input.h"
+#include "host_fs.h"
 #include "keyboard_input.h"
 #include "libretro_host.h"
 #include "vk_texture.h"
@@ -62,6 +63,7 @@ struct App
 
     // Where the host keeps SRAM and savestates ("~/.host-libretro", resolved at startup).
     char data_directory[LIBRETRO_PATH_MAX] = {};
+    uint32_t state_slot = 0;   // savestate slot for Save/Load (F2/F4), changed with F6/F7
 
     AudioOutput audio = {};   // open while a core runs; stream == nullptr = no sound
 
@@ -378,13 +380,94 @@ static const char* pixel_format_name(retro_pixel_format format)
     }
 }
 
+static void draw_options_section(App* app);
+
+// ---------------------------------------------------------------------------
+// Savestates
+// ---------------------------------------------------------------------------
+
+static void save_state(App* app)
+{
+    if (!core_running(app))
+    {
+        return;
+    }
+    if (libretro_host_save_state(app->host, app->state_slot))
+    {
+        set_status(app, "Saved state slot %u", app->state_slot);
+    }
+    else
+    {
+        set_status(app, "Could not save state slot %u (see the log)", app->state_slot);
+    }
+}
+
+static void load_state(App* app)
+{
+    if (!core_running(app))
+    {
+        return;
+    }
+    if (libretro_host_load_state(app->host, app->state_slot))
+    {
+        set_status(app, "Loaded state slot %u", app->state_slot);
+        // What was queued belongs to the time before the load.
+        audio_output_clear(&app->audio);
+    }
+    else
+    {
+        set_status(app, "Could not load state slot %u (see the log)", app->state_slot);
+    }
+}
+
+static void change_state_slot(App* app, int32_t delta)
+{
+    int32_t slot = static_cast<int32_t>(app->state_slot) + delta;
+    int32_t slots = static_cast<int32_t>(LIBRETRO_STATE_SLOTS);
+    app->state_slot = static_cast<uint32_t>((slot % slots + slots) % slots);
+}
+
+static void draw_savestate_section(App* app)
+{
+    if (!ImGui::CollapsingHeader("Savestates", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        return;
+    }
+    ImGui::BeginDisabled(!core_running(app));
+
+    int slot = static_cast<int>(app->state_slot);
+    ImGui::SetNextItemWidth(110.0f);
+    if (ImGui::InputInt("Slot (F6/F7)", &slot))
+    {
+        change_state_slot(app, static_cast<int32_t>(slot) - static_cast<int32_t>(app->state_slot));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save (F2)"))
+    {
+        save_state(app);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load (F4)"))
+    {
+        load_state(app);
+    }
+
+    char path[LIBRETRO_PATH_MAX] = {};
+    if (core_running(app) && libretro_host_state_path(app->host, app->state_slot, path, sizeof(path)))
+    {
+        ImGui::TextDisabled("Slot %u: %s", app->state_slot, host_fs_exists(path) ? "has a state" : "empty");
+        ImGui::SetItemTooltip("%s", path);
+    }
+    ImGui::EndDisabled();
+}
+
 static void draw_controls_window(App* app)
 {
     const ImGuiIO& io = ImGui::GetIO();
     LibretroHost* host = app->host;
 
     ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 560.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 760.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("host-libretro");
 
     ImGui::InputText("Core", app->core_path, sizeof(app->core_path));
@@ -501,6 +584,13 @@ static void draw_controls_window(App* app)
     }
     ImGui::Text("Saves and states: %s", app->data_directory[0] != '\0' ? app->data_directory : "(none)");
 
+    draw_savestate_section(app);
+    // Inside this window (not a separate one) so everything scrolls together.
+    if (ImGui::CollapsingHeader("Core options", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        draw_options_section(app);
+    }
+
     if (ImGui::CollapsingHeader("Controls"))
     {
         ImGui::TextUnformatted("Keyboard: arrows = D-pad, X/Z = A/B, S/A = X/Y,\n"
@@ -562,24 +652,19 @@ static bool category_exists(const LibretroOptions* options, const char* key)
     return false;
 }
 
-static void draw_options_window(App* app)
+// Core options, inside the main window ("Core options" section).
+static void draw_options_section(App* app)
 {
     const LibretroOptions* options = &app->host->options;
-
-    ImGui::SetNextWindowPos(ImVec2(20.0f, 600.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Core options");
 
     if (app->host->core.library.handle == nullptr)
     {
         ImGui::TextUnformatted("No core loaded.");
-        ImGui::End();
         return;
     }
     if (options->count == 0)
     {
         ImGui::TextUnformatted("The core declared no options.");
-        ImGui::End();
         return;
     }
 
@@ -637,7 +722,6 @@ static void draw_options_window(App* app)
         ImGui::PopID();
     }
 
-    ImGui::End();
 }
 
 static bool same_geometry(const retro_game_geometry* a, const retro_game_geometry* b)
@@ -807,6 +891,22 @@ static void handle_events(App* app)
                 }
                 break;
 
+            // Frontend hotkeys (as in RetroArch). In game focus they never get
+            // here: the keyboard belongs to the core then.
+            case SDL_EVENT_KEY_DOWN:
+                if (!event.key.repeat && !ImGui::GetIO().WantTextInput)
+                {
+                    switch (event.key.key)
+                    {
+                        case SDLK_F2: save_state(app); break;
+                        case SDLK_F4: load_state(app); break;
+                        case SDLK_F6: change_state_slot(app, -1); break;
+                        case SDLK_F7: change_state_slot(app, 1); break;
+                        default: break;
+                    }
+                }
+                break;
+
             case SDL_EVENT_GAMEPAD_ADDED:
                 if (app->gamepad == nullptr)
                 {
@@ -887,7 +987,6 @@ int main(int argc, char** argv)
                 // destroy the core texture, so the video window (which puts that texture
                 // into this frame's draw list) must be built AFTER it.
                 draw_controls_window(app);
-                draw_options_window(app);
                 draw_video_window(app);
                 upload_core_video(app);
                 if (!app_shell_present(&app->shell, CLEAR_COLOR))

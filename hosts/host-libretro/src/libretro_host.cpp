@@ -392,6 +392,102 @@ bool libretro_host_save_memory(LibretroHost* host)
 }
 
 // ---------------------------------------------------------------------------
+// Savestates
+// ---------------------------------------------------------------------------
+
+bool libretro_host_state_path(const LibretroHost* host, uint32_t slot, char* out, size_t out_size)
+{
+    char extension[32] = {};
+    std::snprintf(extension, sizeof(extension), ".state%u", slot);
+    return game_file_path(host, "states", extension, out, out_size);
+}
+
+// The core's state size, or 0 if it can't save states (or nothing runs).
+static size_t state_size(LibretroHost* host)
+{
+    if (!host->game_loaded)
+    {
+        return 0;
+    }
+    host_enter(host);
+    size_t size = host->core.retro_serialize_size();
+    host_leave(host);
+    return size;
+}
+
+bool libretro_host_save_state(LibretroHost* host, uint32_t slot)
+{
+    char path[LIBRETRO_PATH_MAX] = {};
+    if (slot >= LIBRETRO_STATE_SLOTS || !libretro_host_state_path(host, slot, path, sizeof(path)))
+    {
+        host_log(LogLevel::error, "Savestate: no slot %u (or no data directory)", slot);
+        return false;
+    }
+    size_t size = state_size(host);
+    if (size == 0)
+    {
+        host_log(LogLevel::error, "Savestate: the core doesn't support savestates (size 0)");
+        return false;
+    }
+
+    uint8_t* buffer = new uint8_t[size];
+    host_enter(host);
+    bool serialized = host->core.retro_serialize(buffer, size);
+    host_leave(host);
+
+    bool ok = serialized && host_fs_write_file(path, buffer, size);
+    delete[] buffer;
+    if (!serialized)
+    {
+        host_log(LogLevel::error, "Savestate: retro_serialize failed");
+        return false;
+    }
+    if (ok)
+    {
+        host_log(LogLevel::info, "Savestate: saved slot %u (%zu bytes) to %s", slot, size, path);
+    }
+    return ok;
+}
+
+bool libretro_host_load_state(LibretroHost* host, uint32_t slot)
+{
+    char path[LIBRETRO_PATH_MAX] = {};
+    if (!host->game_loaded || slot >= LIBRETRO_STATE_SLOTS || !libretro_host_state_path(host, slot, path, sizeof(path)))
+    {
+        host_log(LogLevel::error, "Savestate: no slot %u (or nothing running, or no data directory)", slot);
+        return false;
+    }
+    if (!host_fs_exists(path))
+    {
+        host_log(LogLevel::warning, "Savestate: slot %u is empty (%s)", slot, path);
+        return false;
+    }
+
+    uint8_t* data = nullptr;
+    size_t size = 0;
+    if (!host_fs_read_file(path, &data, &size))
+    {
+        return false;
+    }
+    // The core decides whether the size is acceptable (some cores' sizes vary
+    // between versions or with options); we only pass what the file holds.
+    host_enter(host);
+    bool ok = host->core.retro_unserialize(data, size);
+    host_leave(host);
+    delete[] data;
+
+    if (ok)
+    {
+        host_log(LogLevel::info, "Savestate: loaded slot %u (%zu bytes) from %s", slot, size, path);
+    }
+    else
+    {
+        host_log(LogLevel::error, "Savestate: the core refused %s (retro_unserialize failed)", path);
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
 // Core
 // ---------------------------------------------------------------------------
 

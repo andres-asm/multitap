@@ -166,6 +166,33 @@ if(MULTITAP_BUILD_TESTS)
                  COMMAND libretro_core_info --data-dir "${SRAM_BAD_DIR}" --frames 1 $<TARGET_FILE:test_libretro>)
         set_tests_properties(host_libretro_sram_corrupted PROPERTIES PASS_REGULAR_EXPRESSION "save RAM: CORRUPTED")
 
+        # Savestates: save slot 3 after 50 frames, load it in a new run: the
+        # core must be back at frame 50; an empty slot must be refused.
+        set(STATE_DIR "${CMAKE_CURRENT_BINARY_DIR}/state-test")
+        add_test(NAME host_libretro_state_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${STATE_DIR}")
+        set_tests_properties(host_libretro_state_clean PROPERTIES FIXTURES_SETUP state_clean)
+
+        add_test(NAME host_libretro_state_save
+                 COMMAND libretro_core_info --data-dir "${STATE_DIR}" --frames 50 --save-state 3 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_state_save PROPERTIES
+            FIXTURES_REQUIRED state_clean
+            FIXTURES_SETUP state_saved
+            PASS_REGULAR_EXPRESSION "Savestate: saved slot 3 \\([0-9]+ bytes\\)"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
+
+        add_test(NAME host_libretro_state_load
+                 COMMAND libretro_core_info --data-dir "${STATE_DIR}" --load-state 3 --frames 5 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_state_load PROPERTIES
+            FIXTURES_REQUIRED state_saved
+            PASS_REGULAR_EXPRESSION "state loaded: frame 50, page Environment.*Savestate: loaded slot 3"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
+
+        add_test(NAME host_libretro_state_empty_slot
+                 COMMAND libretro_core_info --data-dir "${STATE_DIR}" --load-state 7 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_state_empty_slot PROPERTIES
+            FIXTURES_REQUIRED state_saved
+            PASS_REGULAR_EXPRESSION "Savestate: slot 7 is empty")
+
         # A value that isn't one of the option's values must be refused.
         add_test(NAME host_libretro_option_bad_value
                  COMMAND libretro_core_info --set libretro_test_width=800 $<TARGET_FILE:test_libretro>)
