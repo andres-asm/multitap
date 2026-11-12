@@ -145,4 +145,10 @@ add_subdirectory(hosts/common)
 add_subdirectory(hosts/host-libretro)
 add_subdirectory(frontends/common)
 add_subdirectory(frontends/libretro)
-add_subdirectory(frontends/piccolo)
+# piccolo lives in its own repository (submodule). Built when present.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/frontends/piccolo/CMakeLists.txt")
+    add_subdirectory(frontends/piccolo)
+else()
+    message(STATUS "frontends/piccolo is empty (submodule not checked out): not building piccolo. "
+                   "Run: git submodule update --init --recursive")
+endif()

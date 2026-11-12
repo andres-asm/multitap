@@ -11,3 +11,6 @@
 [submodule "hosts/host-libretro/test-libretro"]
 	path = hosts/host-libretro/test-libretro
 	url = https://github.com/andres-asm/test-libretro.git
+[submodule "frontends/piccolo"]
+	path = frontends/piccolo
+	url = https://github.com/andres-asm/piccolo.git
