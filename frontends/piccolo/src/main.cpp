@@ -1,8 +1,12 @@
 // piccolo: basic libretro frontend built on host-libretro.
 //
-// Current scope: open a 1920x1080 SDL3 window, render with Vulkan, and show
-// one floating Dear ImGui window. No cores, no host, no audio yet.
-// Window/Vulkan/ImGui setup is shared with other frontends (frontends/common/app_shell).
+// Current scope: open a 1920x1080 SDL3 window, render with Vulkan, show a TEST
+// of the retro-style UI (retro_ui.h: themed Dear ImGui widgets with piccolo's
+// pixel font): a menu bar and a status line. Plus one floating Dear ImGui debug
+// window. No cores, no host, no audio yet. Window/Vulkan/ImGui setup is shared
+// with other frontends (frontends/common/app_shell).
+
+#include <cstdio>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -10,6 +14,9 @@
 #include "imgui.h"
 
 #include "app_shell.h"
+#include "pixel_font.h"
+#include "pixel_font_imgui.h"
+#include "retro_ui.h"
 #include "vk_swapchain.h"
 
 static const ClearColor CLEAR_COLOR = { 0.08f, 0.08f, 0.10f, 1.0f };
@@ -19,7 +26,25 @@ struct App
     AppShell shell = {};
     bool     running = false;
     bool     show_imgui_demo = false;
+
+    ImFont* pixel_font  = nullptr;   // piccolo's pixel font as an ImGui font
+    int32_t ui_scale    = 1;         // window pixels per retro pixel
+    char    status[64]  = "PICK SOMETHING FROM THE MENU";
 };
+
+static void handle_menu_action(App* app, MenuAction action)
+{
+    if (action == MenuAction::none)
+    {
+        return;
+    }
+    std::snprintf(app->status, sizeof(app->status), "PICKED: %s", menu_action_name(action));
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Menu: %s", menu_action_name(action));
+    if (action == MenuAction::quit)
+    {
+        app->running = false;
+    }
+}
 
 static void app_handle_events(App* app)
 {
@@ -45,7 +70,7 @@ static void app_draw_debug_ui(App* app)
     const VkPhysicalDeviceProperties* gpu = &app->shell.vulkan.physical_device_properties;
     const VulkanSwapchain* swapchain = &app->shell.swapchain;
 
-    ImGui::SetNextWindowPos(ImVec2(40.0f, 40.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(40.0f, 80.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("piccolo");
 
     ImGui::Text("GPU: %s", gpu->deviceName);
@@ -54,6 +79,7 @@ static void app_draw_debug_ui(App* app)
     ImGui::Text("Swapchain: %ux%u, %u images, %s", swapchain->extent.width, swapchain->extent.height,
                 swapchain->image_count, vk_present_mode_to_string(swapchain->present_mode));
     ImGui::Text("Validation: %s", app->shell.vulkan.validation_enabled ? "on" : "off");
+    ImGui::Text("Retro UI scale: %dx", app->ui_scale);
     ImGui::Separator();
     ImGui::Text("%.3f ms/frame (%.1f FPS)", static_cast<double>(1000.0f / io.Framerate), static_cast<double>(io.Framerate));
     ImGui::Separator();
@@ -78,7 +104,17 @@ int main(int argc, char** argv)
     config.name       = "piccolo";
     config.identifier = "org.multitap.piccolo";
 
+    if (!pixel_font_init())
+    {
+        return 1;
+    }
     if (!app_shell_create(&app.shell, &config))
+    {
+        app_shell_destroy(&app.shell);
+        return 1;
+    }
+    app.pixel_font = pixel_font_imgui_add();
+    if (app.pixel_font == nullptr)
     {
         app_shell_destroy(&app.shell);
         return 1;
@@ -91,7 +127,13 @@ int main(int argc, char** argv)
 
         if (app_shell_begin_frame(&app.shell))
         {
+            app.ui_scale = retro_ui_scale_for_width(ImGui::GetIO().DisplaySize.x);
+
+            // The status line's window is begun first, so it stays behind everything.
+            retro_ui_status_line(app.pixel_font, app.ui_scale, app.status);
+            handle_menu_action(&app, retro_ui_menu_bar(app.pixel_font, app.ui_scale));
             app_draw_debug_ui(&app);
+
             if (!app_shell_present(&app.shell, CLEAR_COLOR))
             {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Fatal rendering error, exiting");
