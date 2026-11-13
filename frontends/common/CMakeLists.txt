@@ -47,6 +47,7 @@ add_library(frontend_common STATIC
     picture.cpp
     window_size.cpp
     localization.cpp
+    rate_control.cpp
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -116,6 +117,13 @@ if(MULTITAP_BUILD_TESTS)
     add_test(NAME frontend_localization
              COMMAND frontend_localization_test "${CMAKE_CURRENT_BINARY_DIR}/localization_test")
     set_tests_properties(frontend_localization PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+
+    add_executable(frontend_rate_control_test tests/rate_control_test.cpp)
+    target_link_libraries(frontend_rate_control_test PRIVATE frontend_common)
+    multitap_set_project_flags(frontend_rate_control_test)
+    add_test(NAME frontend_rate_control COMMAND frontend_rate_control_test)
+    set_tests_properties(frontend_rate_control PROPERTIES
                          FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
 
     # Resampler comparison (plan-milestones, milestone 2): every candidate is

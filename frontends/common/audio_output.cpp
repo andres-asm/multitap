@@ -128,6 +128,8 @@ bool audio_output_create(AudioOutput* output, double sample_rate)
     }
 
     SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(output->stream), &device_spec, &device_buffer_frames);
+    output->device_buffer_ms = frames_to_ms(device_buffer_frames, output->device_rate);
+    audio_output_set_latency(output, RATE_CONTROL_AUTO_START_MS, true);
     SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO,
                 "Audio: %s, core %.1f Hz -> device %d Hz (libsamplerate, sinc medium), %d ch, %d-frame device buffer",
                 SDL_GetCurrentAudioDriver(), sample_rate, output->device_rate, device_spec.channels,
@@ -173,6 +175,13 @@ void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_co
     {
         return;
     }
+    // A different base speed (e.g. the timing mode changed) makes the learned
+    // correction wrong: start learning again.
+    double change = base_ratio / output->base_ratio - 1.0;
+    if (change > 0.001 || change < -0.001)
+    {
+        rate_control_reset(&output->rate);
+    }
     output->base_ratio = base_ratio;
     output->rate_control = rate_control;
     if (!rate_control)
@@ -181,19 +190,33 @@ void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_co
     }
 }
 
-// DRC: more queued than the target -> play a little faster, less -> slower.
-// Proportional, so the queue settles near the target without oscillating.
-// libsamplerate glides to the new ratio within the next block (no step).
-static void update_rate_control(AudioOutput* output, int64_t queued_frames_now)
+void audio_output_set_latency(AudioOutput* output, uint32_t target_ms, bool automatic)
 {
+    // The device takes whole buffers from our queue: below two of them it
+    // would empty the queue on every request.
+    rate_control_init(&output->rate, target_ms, automatic, output->device_buffer_ms * 2 + 10);
+}
+
+// DRC (rate_control.h): more queued than the target -> play a little faster,
+// less -> slower. libsamplerate glides to the new ratio within the next
+// block (no step).
+static void update_rate_control(AudioOutput* output, int64_t queued_frames_now, bool underrun)
+{
+    uint64_t now = SDL_GetTicksNS();
+    double elapsed = output->last_push_ns > 0 ? static_cast<double>(now - output->last_push_ns) / 1e9 : 0.0;
+    output->last_push_ns = now;
     if (!output->rate_control)
     {
         return;
     }
-    double target = static_cast<double>(output->device_rate) * AUDIO_OUTPUT_DRC_TARGET_MS / 1000.0;
-    double deviation = (static_cast<double>(queued_frames_now) - target) / target;
-    deviation = deviation < -1.0 ? -1.0 : (deviation > 1.0 ? 1.0 : deviation);
-    output->current_ratio = output->base_ratio * (1.0 + AUDIO_OUTPUT_DRC_MAX_DEVIATION * deviation);
+    double queued_ms = static_cast<double>(queued_frames_now) * 1000.0 / static_cast<double>(output->device_rate);
+    double target_before = output->rate.target_ms;
+    output->current_ratio = output->base_ratio * rate_control_update(&output->rate, queued_ms, elapsed, underrun);
+    if (output->rate.target_ms != target_before)
+    {
+        SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO, "Audio latency target: %.0f -> %.0f ms (automatic)", target_before,
+                    output->rate.target_ms);
+    }
 }
 
 // The DSP stage: where an equalizer and filters will go (plan-milestones,
@@ -223,26 +246,36 @@ void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frame
     {
         output->pushes++;
     }
-    if (queued == 0)
+    bool underrun = false;
+    if (!output->started)
     {
-        if (output->started && !warming_up)
-        {
-            output->underruns++;
-            // Logged one by one: the timing pattern tells drift (evenly spaced)
-            // from stalls (bursts, e.g. the window was hidden and vsync stopped).
-            SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO, "Audio underrun #%llu at %.2f s",
-                        static_cast<unsigned long long>(output->underruns),
-                        static_cast<double>(SDL_GetTicks()) / 1000.0);
-        }
+        // A cushion to start from, so the first frames don't run dry at once.
         push_silence(output, AUDIO_OUTPUT_START_SILENCE_MS);
         queued = queued_frames(output);
     }
+    else if (queued == 0 && !warming_up)
+    {
+        // Our queue ran dry. The device may still be playing what it took last
+        // (it takes whole buffers), so this isn't always audible yet; no
+        // silence is added (that would make a gap of our own). It does mean the
+        // target is too low for this device or the loop stalled: rate control
+        // raises an automatic target.
+        underrun = true;
+        output->underruns++;
+        // Logged one by one: the timing pattern tells drift (evenly spaced)
+        // from stalls (bursts, e.g. the window was hidden and vsync stopped).
+        SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO, "Audio underrun #%llu at %.2f s",
+                    static_cast<unsigned long long>(output->underruns),
+                    static_cast<double>(SDL_GetTicks()) / 1000.0);
+    }
     output->started = true;
-    update_rate_control(output, queued);
+    update_rate_control(output, queued, underrun);
 
     // Too far ahead (display faster than the core, or a burst of frames):
     // dropping this block keeps latency bounded at the cost of a click.
-    if (frames_to_ms(queued, output->device_rate) > AUDIO_OUTPUT_MAX_QUEUED_MS)
+    double limit_ms = 2.0 * output->rate.target_ms;
+    limit_ms = limit_ms > AUDIO_OUTPUT_MAX_QUEUED_MS ? limit_ms : AUDIO_OUTPUT_MAX_QUEUED_MS;
+    if (static_cast<double>(frames_to_ms(queued, output->device_rate)) > limit_ms)
     {
         output->dropped_frames += frames;
         return;
@@ -305,6 +338,7 @@ void audio_output_clear(AudioOutput* output)
     }
     SDL_ClearAudioStream(output->stream);
     src_reset(output->resampler);
+    output->last_push_ns = 0;   // a pause isn't a frame interval
     // Not an underrun when we start pushing again: the gap was on purpose.
     output->started = false;
     output->pushes = 0;

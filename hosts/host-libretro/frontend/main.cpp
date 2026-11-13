@@ -690,7 +690,9 @@ static void draw_controls_window(App* app)
                     host->audio.frames);
         if (app->session.audio.stream != nullptr)
         {
-            ImGui::Text("Audio out:     %d Hz, %u ms queued", app->session.audio.sample_rate, audio_output_queued_ms(&app->session.audio));
+            ImGui::Text("Audio out:     %d Hz -> %d Hz, %u ms queued, target %.0f ms%s", app->session.audio.sample_rate,
+                        app->session.audio.device_rate, audio_output_queued_ms(&app->session.audio),
+                        app->session.audio.rate.target_ms, app->session.audio.rate.automatic ? " (auto)" : "");
             ImGui::Text("Underruns:     %llu   Dropped: %llu frames", static_cast<unsigned long long>(app->session.audio.underruns),
                         static_cast<unsigned long long>(app->session.audio.dropped_frames));
         }
