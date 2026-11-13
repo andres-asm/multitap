@@ -11,7 +11,7 @@ Multitap aims to run games through interchangeable emulation backends
 | `frontends/piccolo/`   | Basic libretro frontend (SDL3 + Vulkan + ImGui)             |
 | `hosts/common/`        | Code shared by all core hosts (library loading, logging)     |
 | `hosts/host-libretro/` | Our libretro implementation + `libretro_test_frontend` (video, audio, joypad/analog/pointer/keyboard, core options, save RAM, savestates, timing modes) |
-| `hosts/host-libretro/test-libretro/` | **libretro test**, a core for testing frontends (submodule, [own repo](https://github.com/andres-asm/test-libretro)) |
+| `hosts/host-libretro/test-libretro/` | **Test libretro**, a core for testing frontends (submodule, [own repo](https://github.com/andres-asm/test-libretro)) |
 | `deps/`                | Third-party code as git submodules (never edited)           |
 
 ## Dependencies
@@ -55,9 +55,9 @@ Options:
 
 Debug builds enable Vulkan validation when the layer is installed.
 
-## libretro test
+## Test libretro
 
-[libretro test](https://github.com/andres-asm/test-libretro) is a libretro
+[Test libretro](https://github.com/andres-asm/test-libretro) is a libretro
 core for testing libretro **frontends**. Instead of emulating a system, it walks
 through a series of pages (environment, video, input, audio, save RAM,
 savestates, summary) and reports what the frontend did: answers that break the

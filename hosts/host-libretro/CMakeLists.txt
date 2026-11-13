@@ -144,7 +144,7 @@ if(MULTITAP_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION "Option test_core_speed = normal \\(normal\\|fast\\)"
         FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}")
 
-    # The interactive libretro test core (test_libretro) lives in its own repo, pulled in as a
+    # The interactive Test libretro core (test_libretro) lives in its own repo, pulled in as a
     # submodule. Built when present. Its pages need a human, so CTest only runs a
     # headless smoke test with it (below); the full walk-through is manual.
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test-libretro/CMakeLists.txt")
@@ -153,7 +153,7 @@ if(MULTITAP_BUILD_TESTS)
         # Into the shared cores folder the test frontend lists (root CMakeLists.txt).
         multitap_copy_after_build(test_libretro "${MULTITAP_CORES_DIR}")
 
-        # Headless smoke test: 120 frames of libretro test (environment page) through the host.
+        # Headless smoke test: 120 frames of Test libretro (environment page) through the host.
         # Checks retro_run, video copy/conversion and the input path under the sanitizers.
         add_test(NAME host_libretro_test_libretro_runs
                  COMMAND libretro_core_info --frames 120 $<TARGET_FILE:test_libretro>)
@@ -161,7 +161,7 @@ if(MULTITAP_BUILD_TESTS)
             PASS_REGULAR_EXPRESSION "Ran 120 frames: 120 video frames \\(640x480\\)"
             FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
 
-        # Core options through each API libretro test can pick (it follows the version
+        # Core options through each API Test libretro can pick (it follows the version
         # we report), then a width change at runtime: the core must re-read its
         # options, send SET_GEOMETRY and produce 720x480 frames.
         foreach(_version 2 1 0)
@@ -174,7 +174,7 @@ if(MULTITAP_BUILD_TESTS)
         endforeach()
 
         # Save RAM: the host writes it on unload and loads it back on the next run.
-        # libretro test exposes a 60-byte block; untouched, the core reports it as "empty".
+        # Test libretro exposes a 60-byte block; untouched, the core reports it as "empty".
         set(SRAM_DIR "${CMAKE_CURRENT_BINARY_DIR}/sram-test")
         add_test(NAME host_libretro_sram_clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${SRAM_DIR}")
         set_tests_properties(host_libretro_sram_clean PROPERTIES FIXTURES_SETUP sram_clean)
@@ -196,7 +196,7 @@ if(MULTITAP_BUILD_TESTS)
 
         # Junk in the .srm must be noticed by the core, not silently accepted.
         set(SRAM_BAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/sram-bad-test")
-        file(WRITE "${SRAM_BAD_DIR}/saves/test/test.srm" "this is not the save RAM layout libretro test writes!!!!!!!!")
+        file(WRITE "${SRAM_BAD_DIR}/saves/test/test.srm" "this is not the save RAM layout Test libretro writes!!!!!!!!")
         add_test(NAME host_libretro_sram_corrupted
                  COMMAND libretro_core_info --data-dir "${SRAM_BAD_DIR}" --frames 1 $<TARGET_FILE:test_libretro>)
         set_tests_properties(host_libretro_sram_corrupted PROPERTIES PASS_REGULAR_EXPRESSION "save RAM: CORRUPTED")
@@ -240,7 +240,7 @@ if(MULTITAP_BUILD_TESTS)
         add_test(NAME host_libretro_peek_test_libretro
                  COMMAND libretro_core_info --peek $<TARGET_FILE:test_libretro>)
         set_tests_properties(host_libretro_peek_test_libretro PROPERTIES
-            PASS_REGULAR_EXPRESSION "name \"libretro test\".*no game yes.*4 core options \\(API v2\\)"
+            PASS_REGULAR_EXPRESSION "name \"Test libretro\".*no game yes.*4 core options \\(API v2\\)"
             FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|\\] init")
 
         # A value that isn't one of the option's values must be refused.

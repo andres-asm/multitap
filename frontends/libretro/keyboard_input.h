@@ -1,7 +1,7 @@
 #pragma once
 
 // The keyboard as a libretro keyboard, for cores that want one (typing,
-// computers, the libretro test core's SRAM text field).
+// computers, the Test libretro core's SRAM text field).
 //
 // "Game focus" (toggled with Scroll Lock like RetroArch, or F12): while it's on, the
 // keyboard belongs to the core alone. Keys become RETRO_DEVICE_KEYBOARD state
