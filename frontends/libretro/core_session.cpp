@@ -130,7 +130,8 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
 
     LibretroHostConfig config = {};
     config.core_options_version = session->options_version;
-    config.data_directory = session->data_directory;
+    config.saves_directory = session->saves_directory;
+    config.states_directory = session->states_directory;
     config.system_directory = session->system_directory;
     if (!libretro_host_load_core(session->host, core_path, &config))
     {

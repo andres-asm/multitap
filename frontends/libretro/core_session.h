@@ -39,7 +39,8 @@ struct CoreSession
     LibretroHost* host = nullptr;   // owned; allocated by core_session_create
 
     // Settings for the next start.
-    char     data_directory[LIBRETRO_PATH_MAX] = {};                      // SRAM, states ("" = none)
+    char     saves_directory[LIBRETRO_PATH_MAX] = {};                     // SRAM ("" = not kept)
+    char     states_directory[LIBRETRO_PATH_MAX] = {};                    // savestates ("" = none)
     char     system_directory[LIBRETRO_PATH_MAX] = {};                    // BIOS etc. ("" = none)
     uint32_t options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;         // reported to the core
 

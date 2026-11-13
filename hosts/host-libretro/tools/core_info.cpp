@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "host_log.h"
 #include "libretro_host.h"
@@ -28,7 +29,7 @@ static void print_usage()
                  "  --system DIR         directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
                  "  --save DIR           directory returned for GET_SAVE_DIRECTORY (default: none)\n"
                  "  --options-version N  core options version to report: 2, 1 or 0 (default 2)\n"
-                 "  --data-dir DIR       where the host keeps SRAM and savestates (default: none)\n"
+                 "  --data-dir DIR       SRAM in DIR/saves, savestates in DIR/states (default: none)\n"
                  "  --peek               only ask the core about itself (no retro_init), print it, exit\n"
                  "  --load-state N       load savestate slot N before running frames\n"
                  "  --save-state N       save savestate slot N after running frames\n"
@@ -66,6 +67,8 @@ constexpr int MAX_OPTION_SETS = 16;
 int main(int argc, char** argv)
 {
     LibretroHostConfig config = {};
+    std::string data_saves;    // --data-dir: the config points into these
+    std::string data_states;
     const char* option_sets[MAX_OPTION_SETS] = {};
     bool peek_only = false;
     long load_state_slot = -1;   // -1 = don't
@@ -120,7 +123,13 @@ int main(int argc, char** argv)
         else if (std::strcmp(argument, "--data-dir") == 0 && i + 1 < argc)
         {
             i++;
-            config.data_directory = argv[i];
+            // <dir>/saves and <dir>/states, like a program folder.
+            data_saves = argv[i];
+            data_saves += "/saves";
+            data_states = argv[i];
+            data_states += "/states";
+            config.saves_directory = data_saves.c_str();
+            config.states_directory = data_states.c_str();
         }
         else if (std::strcmp(argument, "--set") == 0 && i + 1 < argc && option_set_count < MAX_OPTION_SETS)
         {

@@ -251,10 +251,9 @@ static const char* safe_string(const char* text)
 // Per-game files (SRAM, RTC, later savestates)
 // ---------------------------------------------------------------------------
 
-// "snes9x" from ".../snes9x_libretro.so".
-static bool core_short_name(const LibretroHost* host, char* out, size_t out_size)
+bool libretro_core_short_name(const char* core_path, char* out, size_t out_size)
 {
-    if (!host_fs_stem(host->core_path, out, out_size))
+    if (!host_fs_stem(core_path, out, out_size))
     {
         return false;
     }
@@ -268,24 +267,24 @@ static bool core_short_name(const LibretroHost* host, char* out, size_t out_size
     return true;
 }
 
-// <data>/<folder>/<core>/<game><extension>. The game is the content file's
+// <directory>/<core>/<game><extension>. The game is the content file's
 // name without extension, or the core's name when it runs without content.
-// False if there's no data directory or the path doesn't fit.
-static bool game_file_path(const LibretroHost* host, const char* folder, const char* extension, char* out, size_t out_size)
+// False if `directory` is empty or the path doesn't fit.
+static bool game_file_path(const LibretroHost* host, const char* directory, const char* extension, char* out, size_t out_size)
 {
     char core_name[256] = {};
     char game_name[256] = {};
-    if (host->data_directory[0] == '\0' || !core_short_name(host, core_name, sizeof(core_name)))
+    if (directory[0] == '\0' || !libretro_core_short_name(host->core_path, core_name, sizeof(core_name)))
     {
         return false;
     }
     bool named = host->content_path[0] != '\0' ? host_fs_stem(host->content_path, game_name, sizeof(game_name))
-                                                : core_short_name(host, game_name, sizeof(game_name));
+                                                : libretro_core_short_name(host->core_path, game_name, sizeof(game_name));
     if (!named)
     {
         return false;
     }
-    int written = std::snprintf(out, out_size, "%s/%s/%s/%s%s", host->data_directory, folder, core_name, game_name, extension);
+    int written = std::snprintf(out, out_size, "%s/%s/%s%s", directory, core_name, game_name, extension);
     return written > 0 && static_cast<size_t>(written) < out_size;
 }
 
@@ -329,7 +328,7 @@ static void load_memory_regions(LibretroHost* host)
         size_t size = 0;
         void* data = memory_region(host, region->id, &size);
         char path[LIBRETRO_PATH_MAX] = {};
-        if (data == nullptr || !game_file_path(host, "saves", region->extension, path, sizeof(path)))
+        if (data == nullptr || !game_file_path(host, host->saves_directory, region->extension, path, sizeof(path)))
         {
             continue;
         }
@@ -375,7 +374,7 @@ bool libretro_host_save_memory(LibretroHost* host)
         size_t size = 0;
         void* data = memory_region(host, region->id, &size);
         char path[LIBRETRO_PATH_MAX] = {};
-        if (data == nullptr || !game_file_path(host, "saves", region->extension, path, sizeof(path)))
+        if (data == nullptr || !game_file_path(host, host->saves_directory, region->extension, path, sizeof(path)))
         {
             continue;
         }
@@ -399,7 +398,7 @@ bool libretro_host_state_path(const LibretroHost* host, uint32_t slot, char* out
 {
     char extension[32] = {};
     std::snprintf(extension, sizeof(extension), ".state%u", slot);
-    return game_file_path(host, "states", extension, out, out_size);
+    return game_file_path(host, host->states_directory, extension, out, out_size);
 }
 
 // The core's state size, or 0 if it can't save states (or nothing runs).
@@ -502,7 +501,8 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
     if (!copy_path(host->core_path, sizeof(host->core_path), core_path, "Core") ||
         !copy_path(host->system_directory, sizeof(host->system_directory), config->system_directory, "System directory") ||
         !copy_path(host->save_directory, sizeof(host->save_directory), config->save_directory, "Save directory") ||
-        !copy_path(host->data_directory, sizeof(host->data_directory), config->data_directory, "Data directory"))
+        !copy_path(host->saves_directory, sizeof(host->saves_directory), config->saves_directory, "Saves directory") ||
+        !copy_path(host->states_directory, sizeof(host->states_directory), config->states_directory, "States directory"))
     {
         return false;
     }

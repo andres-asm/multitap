@@ -1092,7 +1092,8 @@ int main(int argc, char** argv)
         {
             app->imgui_ini = app->paths.settings + "/imgui.ini";
             io.IniFilename = app->imgui_ini.c_str();
-            copy_path(app->session.data_directory, sizeof(app->session.data_directory), app->paths.root.c_str());
+            copy_path(app->session.saves_directory, sizeof(app->session.saves_directory), app->paths.saves.c_str());
+            copy_path(app->session.states_directory, sizeof(app->session.states_directory), app->paths.states.c_str());
             copy_path(app->session.system_directory, sizeof(app->session.system_directory), app->paths.system.c_str());
             std::string cache_path = app->paths.root + "/core_info_cache.cfg";
             core_catalog_init(&app->catalog, app->paths.cores.c_str(), cache_path.c_str());

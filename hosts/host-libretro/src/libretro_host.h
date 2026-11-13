@@ -97,10 +97,11 @@ struct LibretroHostConfig
     const char* system_directory = "";
     const char* save_directory   = "";
 
-    // Where the HOST keeps per-game data: SRAM/RTC in <data>/saves/<core>/<game>.srm
-    // (.rtc) and savestates in <data>/states/<core>/<game>.state<N>. Empty = not saved.
+    // Where the HOST keeps per-game files: SRAM/RTC in <saves>/<core>/<game>.srm
+    // (.rtc) and savestates in <states>/<core>/<game>.state<N>. Empty = not kept.
     // (save_directory above is what the core is told for its OWN files.)
-    const char* data_directory   = "";
+    const char* saves_directory  = "";
+    const char* states_directory = "";
 
     // Highest core options version we tell the core about (GET_CORE_OPTIONS_VERSION):
     // 2 = v2, 1 = v1, 0 = don't answer at all, like a frontend from before
@@ -120,7 +121,8 @@ struct LibretroHost
     char core_path[LIBRETRO_PATH_MAX]        = {};
     char system_directory[LIBRETRO_PATH_MAX] = {};
     char save_directory[LIBRETRO_PATH_MAX]   = {};
-    char data_directory[LIBRETRO_PATH_MAX]   = {};
+    char saves_directory[LIBRETRO_PATH_MAX]  = {};
+    char states_directory[LIBRETRO_PATH_MAX] = {};
     char content_path[LIBRETRO_PATH_MAX]     = {};
 
     // Content loaded into memory (when the core doesn't need a path).
@@ -218,6 +220,10 @@ void libretro_host_unload_core(LibretroHost* host);
 // its path is spelled) is refused (info->already_loaded): peeking would run
 // retro_set_environment a second time on the live core.
 bool libretro_host_peek_core(const char* core_path, LibretroCoreInfo* info);
+
+// A core's short name, as save files and settings use it: "snes9x" from
+// ".../snes9x_libretro.so". False if it doesn't fit in `out`.
+bool libretro_core_short_name(const char* core_path, char* out, size_t out_size);
 
 // True if a core with this info can start `content_path`: its extension is in
 // the core's list (case-insensitive; an empty list accepts anything), or, for
