@@ -26,6 +26,7 @@
 #include "core_session.h"
 #include "host_fs.h"
 #include "libretro_host.h"
+#include "picture.h"
 #include "settings_file.h"
 #include "vk_texture.h"
 
@@ -41,6 +42,25 @@ struct ImageArea
     float height  = 0.0f;
     bool  hovered = false;
     bool  held    = false;   // left mouse button held down on the image
+
+    // The part of the core's frame shown there (crop), as fractions of it.
+    float frame_u0 = 0.0f;
+    float frame_v0 = 0.0f;
+    float frame_u1 = 1.0f;
+    float frame_v1 = 1.0f;
+};
+
+// The Video window's picture options (viewport.h / picture.h), to try them
+// all here before piccolo gets real settings. Indexes into the lists in
+// draw_picture_controls().
+struct PictureControls
+{
+    int   aspect        = 0;   // core
+    int   scaling       = 0;   // full
+    int   filter        = 0;   // nearest
+    int   anchor        = 4;   // center
+    int   crop[4]       = {};  // top, bottom, left, right
+    float max_offscreen = 5.0f;
 };
 
 struct App
@@ -55,7 +75,9 @@ struct App
     char content_path[LIBRETRO_PATH_MAX] = {};
     char status[512]                     = {};
 
-    ImageArea    image_area = {};
+    ImageArea       image_area = {};
+    PictureControls picture_controls = {};
+    Picture         picture = {};
 
     // The program folder (app_paths.h: ~/.local/share/host-libretro on Linux)
     // and its subfolders. The host keeps SRAM and savestates in it.
@@ -329,6 +351,10 @@ static bool core_running(const App* app)
 static void upload_core_video(App* app)
 {
     core_session_upload_video(&app->session, &app->shell);
+    if (app_shell_acquire(&app->shell))
+    {
+        picture_record(&app->picture, renderer_command_buffer(&app->shell.renderer), &app->session.texture);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +405,9 @@ static void read_pointer(const App* app, LibretroInputState* input)
     float normalized_y = (mouse.y - area->y) / area->height;
     normalized_x = normalized_x < 0.0f ? 0.0f : (normalized_x > 1.0f ? 1.0f : normalized_x);
     normalized_y = normalized_y < 0.0f ? 0.0f : (normalized_y > 1.0f ? 1.0f : normalized_y);
+    // From the shown part to the whole frame (they differ when cropping).
+    normalized_x = area->frame_u0 + normalized_x * (area->frame_u1 - area->frame_u0);
+    normalized_y = area->frame_v0 + normalized_y * (area->frame_v1 - area->frame_v0);
 
     input->pointer_valid = true;
     input->pointer_x = static_cast<int16_t>(normalized_x * 65534.0f - 32767.0f);
@@ -519,6 +548,58 @@ static void draw_timing_section(App* app)
     }
 }
 
+static const char* const ASPECT_NAMES[] = {"Core provided", "Square pixels", "4:3", "16:9", "8:7", "Stretch"};
+static const char* const SCALING_NAMES[] = {"Full", "Integer (under)", "Integer (over)", "Auto"};
+static const char* const FILTER_NAMES[] = {"Nearest", "Bilinear", "Sharp bilinear"};
+static const char* const ANCHOR_NAMES[] = {"Top left", "Top",         "Top right", "Left",        "Center",
+                                           "Right",    "Bottom left", "Bottom",    "Bottom right"};
+
+static void draw_picture_controls(PictureControls* controls)
+{
+    if (!ImGui::CollapsingHeader("Picture (Video window)", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        return;
+    }
+    ImGui::PushItemWidth(160.0f);
+    ImGui::Combo("Aspect", &controls->aspect, ASPECT_NAMES, IM_ARRAYSIZE(ASPECT_NAMES));
+    ImGui::SameLine();
+    ImGui::Combo("Scaling", &controls->scaling, SCALING_NAMES, IM_ARRAYSIZE(SCALING_NAMES));
+    ImGui::Combo("Filter", &controls->filter, FILTER_NAMES, IM_ARRAYSIZE(FILTER_NAMES));
+    ImGui::SameLine();
+    ImGui::Combo("Position", &controls->anchor, ANCHOR_NAMES, IM_ARRAYSIZE(ANCHOR_NAMES));
+    ImGui::SliderFloat("Auto: max offscreen %", &controls->max_offscreen, 0.0f, 50.0f, "%.1f");
+    ImGui::SliderInt4("Crop T/B/L/R", controls->crop, 0, 64);
+    ImGui::PopItemWidth();
+}
+
+// The controls as viewport settings.
+static void picture_input_from_controls(const PictureControls* controls, ViewportInput* input)
+{
+    static const ViewportAspect ASPECTS[] = {ViewportAspect::core,  ViewportAspect::square_pixels, ViewportAspect::fixed,
+                                             ViewportAspect::fixed, ViewportAspect::fixed,         ViewportAspect::stretch};
+    static const double FIXED_ASPECTS[] = {0.0, 0.0, 4.0 / 3.0, 16.0 / 9.0, 8.0 / 7.0, 0.0};
+    static const ViewportScaling SCALINGS[] = {ViewportScaling::full, ViewportScaling::integer_under,
+                                               ViewportScaling::integer_over, ViewportScaling::automatic};
+    static const ViewportFilter FILTERS[] = {ViewportFilter::nearest, ViewportFilter::bilinear,
+                                             ViewportFilter::sharp_bilinear};
+    static const ViewportAnchor ANCHORS[] = {ViewportAnchor::top_left,    ViewportAnchor::top,
+                                             ViewportAnchor::top_right,   ViewportAnchor::left,
+                                             ViewportAnchor::center,      ViewportAnchor::right,
+                                             ViewportAnchor::bottom_left, ViewportAnchor::bottom,
+                                             ViewportAnchor::bottom_right};
+    size_t aspect = static_cast<size_t>(controls->aspect);
+    input->aspect = ASPECTS[aspect];
+    input->fixed_aspect = FIXED_ASPECTS[aspect];
+    input->scaling = SCALINGS[static_cast<size_t>(controls->scaling)];
+    input->filter = FILTERS[static_cast<size_t>(controls->filter)];
+    input->anchor = ANCHORS[static_cast<size_t>(controls->anchor)];
+    input->max_offscreen_percent = static_cast<double>(controls->max_offscreen);
+    input->crop.top = static_cast<uint32_t>(controls->crop[0]);
+    input->crop.bottom = static_cast<uint32_t>(controls->crop[1]);
+    input->crop.left = static_cast<uint32_t>(controls->crop[2]);
+    input->crop.right = static_cast<uint32_t>(controls->crop[3]);
+}
+
 static void draw_controls_window(App* app)
 {
     const ImGuiIO& io = ImGui::GetIO();
@@ -644,6 +725,7 @@ static void draw_controls_window(App* app)
     ImGui::Text("Saves and states: %s", app->paths.root.empty() ? "(none)" : app->paths.root.c_str());
 
     draw_savestate_section(app);
+    draw_picture_controls(&app->picture_controls);
     // Inside this window (not a separate one) so everything scrolls together.
     if (ImGui::CollapsingHeader("Core options", ImGuiTreeNodeFlags_DefaultOpen))
     {
@@ -834,6 +916,7 @@ static void draw_video_window(App* app)
     ImGui::Begin("Video");
 
     app->image_area.visible = false;
+    app->picture.ready = false;
     const StreamingTexture* texture = &app->session.texture;
 
     if (!core_running(app) || !texture->has_content || app->session.texture_id == 0)
@@ -843,49 +926,52 @@ static void draw_video_window(App* app)
         return;
     }
 
-    // Fit the image into the window, keeping the core's aspect ratio.
-    float content_width = static_cast<float>(texture->content_width);
-    float content_height = static_cast<float>(texture->content_height);
-    float aspect = app->session.host->av_info.geometry.aspect_ratio;
-    if (aspect <= 0.0f)
-    {
-        aspect = content_width / content_height;
-    }
-
+    // The rest of the window is the "screen" the picture is placed on.
     ImVec2 available = ImGui::GetContentRegionAvail();
-    float width = available.x;
-    float height = width / aspect;
-    if (height > available.y)
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    if (available.x < 1.0f || available.y < 1.0f)
     {
-        height = available.y;
-        width = height * aspect;
+        ImGui::End();
+        return;
     }
-    if (width < 1.0f || height < 1.0f)
+    ViewportInput input = {};
+    input.frame_width = texture->content_width;
+    input.frame_height = texture->content_height;
+    input.core_aspect = static_cast<double>(app->session.host->av_info.geometry.aspect_ratio);
+    input.window_width = static_cast<uint32_t>(available.x);
+    input.window_height = static_cast<uint32_t>(available.y);
+    picture_input_from_controls(&app->picture_controls, &input);
+
+    ViewportResult viewport = {};
+    if (!viewport_compute(&input, &viewport) ||
+        !picture_prepare(&app->picture, &app->shell.vulkan, texture, &viewport))
     {
         ImGui::End();
         return;
     }
 
-    ImVec2 cursor = ImGui::GetCursorScreenPos();
-    cursor.x += (available.x - width) * 0.5f;
-    ImGui::SetCursorScreenPos(cursor);
-
-    // An invisible button over the image takes the mouse, so clicking the image
+    // An invisible button over the whole area takes the mouse, so clicking
     // goes to the core as a pointer instead of dragging the ImGui window.
-    ImGui::InvisibleButton("core_video_input", ImVec2(width, height));
+    ImGui::InvisibleButton("core_video_input", available);
     app->image_area.hovered = ImGui::IsItemHovered();
     app->image_area.held = ImGui::IsItemActive();
     app->image_area.visible = true;
-    app->image_area.x = cursor.x;
-    app->image_area.y = cursor.y;
-    app->image_area.width = width;
-    app->image_area.height = height;
+    app->image_area.x = origin.x + static_cast<float>(viewport.x);
+    app->image_area.y = origin.y + static_cast<float>(viewport.y);
+    app->image_area.width = static_cast<float>(viewport.width);
+    app->image_area.height = static_cast<float>(viewport.height);
+    float frame_width = static_cast<float>(texture->content_width);
+    float frame_height = static_cast<float>(texture->content_height);
+    app->image_area.frame_u0 = static_cast<float>(viewport.source_x) / frame_width;
+    app->image_area.frame_v0 = static_cast<float>(viewport.source_y) / frame_height;
+    app->image_area.frame_u1 = static_cast<float>(viewport.source_x + viewport.source_width) / frame_width;
+    app->image_area.frame_v1 = static_cast<float>(viewport.source_y + viewport.source_height) / frame_height;
 
-    ImGui::SetCursorScreenPos(cursor);
-    float u = 0.0f;
-    float v = 0.0f;
-    streaming_texture_uv_max(texture, &u, &v);
-    debug_ui_image_nearest(app->session.texture_id, width, height, u, v);
+    // Clip to the area: integer over / auto may make the picture bigger.
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->PushClipRect(origin, ImVec2(origin.x + available.x, origin.y + available.y), true);
+    picture_draw(&app->picture, draw_list, texture, app->session.texture_id, origin.x, origin.y);
+    draw_list->PopClipRect();
 
     ImGui::End();
 }
@@ -1069,6 +1155,7 @@ int main(int argc, char** argv)
     }
 
     core_session_destroy(&app->session, &app->shell);
+    picture_destroy(&app->picture, &app->shell.vulkan);
     app_shell_destroy(&app->shell);
     delete app;
     return exit_code;
