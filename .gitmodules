@@ -14,3 +14,9 @@
 [submodule "frontends/piccolo"]
 	path = frontends/piccolo
 	url = https://github.com/andres-asm/piccolo.git
+[submodule "deps/libsamplerate"]
+	path = deps/libsamplerate
+	url = https://github.com/libsndfile/libsamplerate.git
+[submodule "deps/speexdsp"]
+	path = deps/speexdsp
+	url = https://github.com/xiph/speexdsp.git
