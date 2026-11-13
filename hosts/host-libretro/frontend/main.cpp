@@ -533,7 +533,9 @@ static void draw_timing_section(App* app)
     if (app->session.audio.stream != nullptr)
     {
         ImGui::Text("Audio speed: x%.5f%s", app->session.audio.current_ratio,
-                    app->session.audio.rate_control ? " (matched to the display + DRC)" : "");
+                    !app->session.audio.rate_control                     ? ""
+                    : app->session.timing.effective == TimingMode::vsync ? " (matched to the display + DRC)"
+                                                                         : " (DRC)");
     }
 }
 

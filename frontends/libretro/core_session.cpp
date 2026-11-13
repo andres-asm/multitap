@@ -207,7 +207,10 @@ void core_session_update(CoreSession* session, AppShell* shell)
     {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Could not switch vsync %s", vsync ? "on" : "off");
     }
-    audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing), vsync);
+    // DRC in both modes. Vsync: on top of display Hz / core fps. Exact: on top
+    // of ratio 1, because the frame timer (SDL_GetTicksNS) and the audio device
+    // clock differ by tens of ppm, enough to drain or fill the queue in minutes.
+    audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing), true);
 }
 
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,

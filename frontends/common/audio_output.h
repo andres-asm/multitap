@@ -7,12 +7,15 @@
 // Speed (audio_output_set_speed), following the frontend's timing mode
 // (decided 2026-11-12):
 //   - Exact: the core runs at its own fps, so its audio plays at its own rate
-//     (ratio 1). Only the clocks' tiny drift is left, handled as below.
+//     (base ratio 1).
 //   - Vsync: the core runs at the display rate, so its audio must play
-//     display Hz / core fps faster or slower, plus dynamic rate control (DRC):
-//     a correction of at most AUDIO_OUTPUT_DRC_MAX_DEVIATION that keeps the
-//     queue near AUDIO_OUTPUT_DRC_TARGET_MS. Both through SDL's own resampler
-//     (SDL_SetAudioStreamFrequencyRatio); an own resampler can replace it here later.
+//     display Hz / core fps faster or slower (base ratio).
+// Both modes add dynamic rate control (DRC) on top: a correction of at most
+// AUDIO_OUTPUT_DRC_MAX_DEVIATION that keeps the queue near
+// AUDIO_OUTPUT_DRC_TARGET_MS. In Exact mode it absorbs the drift between the
+// frame timer's clock and the audio device's clock (tens of ppm). All through
+// SDL's own resampler (SDL_SetAudioStreamFrequencyRatio); an own resampler can
+// replace it here later.
 //
 // Safety nets for whatever is left (stalls, a hidden window):
 //   - too much queued (above AUDIO_OUTPUT_MAX_QUEUED_MS): drop the new audio;
@@ -38,7 +41,7 @@ constexpr uint32_t AUDIO_OUTPUT_MAX_QUEUED_MS    = 150;
 constexpr uint32_t AUDIO_OUTPUT_START_SILENCE_MS = 50;
 constexpr uint32_t AUDIO_OUTPUT_WARMUP_PUSHES    = 30;   // ~0.5 s at 60 fps
 
-// Dynamic rate control (Vsync timing mode): the playback speed follows the
+// Dynamic rate control (both timing modes): the playback speed follows the
 // queue, so it settles around AUDIO_OUTPUT_DRC_TARGET_MS instead of slowly
 // filling up or running dry. At most this much faster or slower than the base
 // speed: 0.5% is a pitch change nobody hears.
@@ -76,7 +79,7 @@ void audio_output_set_sample_rate(AudioOutput* output, double sample_rate);
 // base_ratio: how much faster than its own sample rate the core's audio must
 // play. In Vsync timing mode the core runs at the display rate instead of its
 // own fps, so base_ratio = display Hz / core fps (e.g. 59.91 / 60.0988); in
-// Exact mode it's 1. rate_control: DRC on top of it (Vsync mode).
+// Exact mode it's 1. rate_control: DRC on top of it (frontends use it in both modes).
 void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_control);
 
 // Queues `frames` stereo frames (frames * 2 int16 values).

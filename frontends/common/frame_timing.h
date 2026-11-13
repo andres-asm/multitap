@@ -10,8 +10,9 @@
 //          display rate; otherwise it falls back to Exact on its own
 //          (e.g. a 50 fps core on a 60 Hz display).
 //   Exact  vsync off; frames are paced by a timer at exactly the core's fps.
-//          Audio plays at its own rate. Later the natural mode for
-//          FreeSync/G-Sync displays.
+//          Audio plays at its own rate, with DRC on top to absorb the drift
+//          between the timer's clock and the audio device's. Later the
+//          natural mode for FreeSync/G-Sync displays.
 //
 // Shared by every frontend (frontend_common). It may move into the host later,
 // with the rest of the frame loop.
