@@ -414,6 +414,30 @@ const char* settings_get_text(const Settings* settings, const char* key)
     return value != nullptr ? value : "";
 }
 
+bool settings_layer_has_values(const Settings* settings, SettingLayer layer)
+{
+    const char* section = layer_section(settings, layer);
+    if (section == nullptr)
+    {
+        return false;
+    }
+    int32_t index = settings_file_find_section(&settings->file, section);
+    if (index < 0)
+    {
+        return false;
+    }
+    const SettingsFileSection* found = &settings->file.sections[static_cast<size_t>(index)];
+    for (size_t i = 0; i < found->entries.size(); i++)
+    {
+        const SettingDescriptor* descriptor = settings_find(settings, found->entries[i].key.c_str());
+        if (descriptor != nullptr && layer_allowed(descriptor, layer))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 const char* settings_get_layer(const Settings* settings, SettingLayer layer, const char* key)
 {
     const char* section = layer_section(settings, layer);

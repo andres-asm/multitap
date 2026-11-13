@@ -118,6 +118,11 @@ const char* settings_get_text(const Settings* settings, const char* key); // pat
 // default. What a settings screen shows while editing that layer.
 const char* settings_get_at(const Settings* settings, SettingLayer layer, const char* key, SettingLayer* source);
 
+// Does `layer` (for what runs now) set any of our settings, in a way that
+// counts (a known key that may be set there)? For a settings screen that
+// opens on the most specific layer in use.
+bool settings_layer_has_values(const Settings* settings, SettingLayer layer);
+
 // What one layer itself defines (valid or not), or nullptr. For the UI.
 const char* settings_get_layer(const Settings* settings, SettingLayer layer, const char* key);
 

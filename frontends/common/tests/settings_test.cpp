@@ -217,6 +217,34 @@ static void test_get_at_and_typed_setters()
     check(!settings_get_bool(&settings, "pause_on_focus_loss"), "bool read back");
 }
 
+static void test_layer_has_values()
+{
+    Settings settings = {};
+    settings_init(&settings, DESCRIPTORS, DESCRIPTOR_COUNT);
+    check(!settings_layer_has_values(&settings, SettingLayer::global), "empty: global has nothing");
+    check(!settings_layer_has_values(&settings, SettingLayer::core), "no core running: no core layer");
+
+    // A file with a misplaced global-only key and an unknown key for the game.
+    const char* text =
+        "[core:snes9x]\n"
+        "pause_on_focus_loss = false\n"
+        "[game:snes9x/Tetris]\n"
+        "something_unknown = 1\n";
+    settings_file_parse(&settings.file, text, std::strlen(text), "test");
+    settings_set_context(&settings, "snes9x", "Tetris");
+    check(!settings_layer_has_values(&settings, SettingLayer::core), "a global-only key doesn't count for core");
+    check(!settings_layer_has_values(&settings, SettingLayer::game), "an unknown key doesn't count");
+
+    check(settings_set(&settings, SettingLayer::core, "video_scaling", "full"), "set a core value");
+    check(settings_layer_has_values(&settings, SettingLayer::core), "core layer in use");
+    check(!settings_layer_has_values(&settings, SettingLayer::game), "game layer still not in use");
+    check(settings_set(&settings, SettingLayer::game, "video_crop_top", "8"), "set a game value");
+    check(settings_layer_has_values(&settings, SettingLayer::game), "game layer in use");
+    check(settings_reset(&settings, SettingLayer::game, "video_crop_top"), "reset it");
+    check(!settings_layer_has_values(&settings, SettingLayer::game), "game layer empty again");
+    check(!settings_layer_has_values(&settings, SettingLayer::defaults), "defaults is never a layer in use");
+}
+
 static void test_load_save(const char* directory)
 {
     std::string path = directory;
@@ -295,6 +323,7 @@ int main(int argc, char** argv)
     test_validation();
     test_layers();
     test_get_at_and_typed_setters();
+    test_layer_has_values();
     test_load_save(argv[1]);
 
     if (g_failures == 0)
