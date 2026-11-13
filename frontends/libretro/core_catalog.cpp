@@ -282,6 +282,17 @@ void core_catalog_scan(CoreCatalog* catalog, const LibretroHost* running)
         {
             libretro_host_peek_core(path, &entry->info);
             catalog->peeked_last_scan++;
+            // The host refused: it's loaded under another spelling of its path.
+            // If it's the running core, its host has the real info.
+            if (entry->info.already_loaded && running != nullptr && running->core.library.handle != nullptr)
+            {
+                info_from_running_host(running, &entry->info);
+            }
+            // Never cache "already loaded": once it's unloaded, the next scan must peek it.
+            if (entry->info.already_loaded)
+            {
+                entry->mtime = -1;
+            }
         }
     }
     if (names != nullptr)

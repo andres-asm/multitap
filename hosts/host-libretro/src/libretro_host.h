@@ -66,6 +66,7 @@ struct LibretroCoreInfo
 {
     bool     usable = false;                          // false: see `error`
     char     error[LIBRETRO_INFO_TEXT_MAX] = {};
+    bool     already_loaded = false;                  // refused: the library is loaded in this process (running?)
 
     char     name[LIBRETRO_INFO_TEXT_MAX]    = {};    // retro_system_info.library_name
     char     version[LIBRETRO_INFO_TEXT_MAX] = {};    // library_version
@@ -212,9 +213,10 @@ void libretro_host_unload_core(LibretroHost* host);
 // (catches SET_SUPPORT_NO_GAME, core options, ...) and retro_get_system_info,
 // never retro_init, then unloads it. Same approach as RetroArch's system info
 // probe. Returns false if the file isn't a usable core (info->error says why).
-// Uses its own temporary host, so other cores can keep running, but never peek
-// the core that is running in another host: it's the same loaded library, and
-// its retro_set_environment would run a second time on the live core.
+// Uses its own temporary host, so other cores can keep running. A core whose
+// library is already loaded in this process (running in another host, however
+// its path is spelled) is refused (info->already_loaded): peeking would run
+// retro_set_environment a second time on the live core.
 bool libretro_host_peek_core(const char* core_path, LibretroCoreInfo* info);
 
 // True if a core with this info can start `content_path`: its extension is in

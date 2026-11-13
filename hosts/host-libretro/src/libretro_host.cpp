@@ -574,6 +574,16 @@ bool libretro_host_peek_core(const char* core_path, LibretroCoreInfo* info)
         delete host;
         return false;
     }
+    // The same library loaded twice is one library: its retro_set_environment
+    // would run again on the live core. Checked by the OS, so a symlink or
+    // "dir//core.so" can't slip past.
+    if (dynamic_library_is_loaded(host->core_path))
+    {
+        copy_text(info->error, sizeof(info->error), "already loaded (running?): not peeked");
+        info->already_loaded = true;
+        delete host;
+        return false;
+    }
     if (!libretro_core_load(&host->core, host->core_path))
     {
         copy_text(info->error, sizeof(info->error), "not a usable libretro core (can't load it, or a retro_* symbol is missing)");

@@ -22,3 +22,9 @@ GenericFunction dynamic_library_symbol(const DynamicLibrary* library, const char
 
 // Safe on a library that was never opened.
 void dynamic_library_close(DynamicLibrary* library);
+
+// True if the library at `path` (UTF-8) is already loaded in this process,
+// however the path is spelled (symlink, "dir//lib.so"...): the OS identifies
+// it by the file, not the string. Never loads it and leaves its reference
+// count as it was.
+bool dynamic_library_is_loaded(const char* path);

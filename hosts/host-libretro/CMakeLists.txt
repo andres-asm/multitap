@@ -99,6 +99,21 @@ if(MULTITAP_BUILD_TESTS)
     set_tests_properties(host_libretro_peek_wrong_extension PROPERTIES
         PASS_REGULAR_EXPRESSION "Peek: does NOT accept game\\.sfc")
 
+    # A loaded core must not be peeked, whatever the path spelling (symlink, "//").
+    add_executable(host_libretro_peek_loaded_test tests/peek_loaded_test.cpp)
+    target_link_libraries(host_libretro_peek_loaded_test PRIVATE host_libretro)
+    multitap_set_project_flags(host_libretro_peek_loaded_test)
+    set(TEST_CORE_LINK "${CMAKE_CURRENT_BINARY_DIR}/test_core_link_libretro${CMAKE_SHARED_MODULE_SUFFIX}")
+    add_custom_command(TARGET test_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:test_core> "${TEST_CORE_LINK}"
+        VERBATIM)
+    add_test(NAME host_libretro_peek_loaded
+             COMMAND host_libretro_peek_loaded_test $<TARGET_FILE:test_core>
+                     "$<TARGET_FILE_DIR:test_core>//$<TARGET_FILE_NAME:test_core>" "${TEST_CORE_LINK}")
+    set_tests_properties(host_libretro_peek_loaded PROPERTIES
+        PASS_REGULAR_EXPRESSION "peek loaded: all checks passed"
+        FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}")
+
     add_test(NAME host_libretro_peek_missing_symbol
              COMMAND libretro_core_info --peek $<TARGET_FILE:test_core_missing_symbol>)
     set_tests_properties(host_libretro_peek_missing_symbol PROPERTIES

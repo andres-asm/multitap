@@ -60,6 +60,21 @@ void dynamic_library_close(DynamicLibrary* library)
     }
 }
 
+bool dynamic_library_is_loaded(const char* path)
+{
+    int wide_length = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+    if (wide_length <= 0)
+    {
+        return false;
+    }
+    wchar_t* wide_path = new wchar_t[static_cast<size_t>(wide_length)];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, wide_length);
+    // GetModuleHandleW doesn't load anything or change the reference count.
+    HMODULE module = GetModuleHandleW(wide_path);
+    delete[] wide_path;
+    return module != nullptr;
+}
+
 #else
 
 // ---------------------------------------------------------------------------
@@ -101,6 +116,21 @@ void dynamic_library_close(DynamicLibrary* library)
         dlclose(library->handle);
         library->handle = nullptr;
     }
+}
+
+bool dynamic_library_is_loaded(const char* path)
+{
+    // RTLD_NOLOAD: only succeeds if it's already loaded (the loader matches
+    // the file itself, so other spellings of the path are caught). It still
+    // returns a new reference, which we give back right away.
+    void* handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD);
+    if (handle == nullptr)
+    {
+        dlerror();   // clear the "not loaded" error so it doesn't show up later
+        return false;
+    }
+    dlclose(handle);
+    return true;
 }
 
 #endif
