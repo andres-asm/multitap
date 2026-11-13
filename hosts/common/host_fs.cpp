@@ -1,20 +1,35 @@
 #include "host_fs.h"
 
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
-
-#if defined(_WIN32)
-#include <direct.h>
-#include <io.h>
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#endif
+#include <filesystem>
+#include <string>
+#include <system_error>
 
 #include "host_log.h"
 
-constexpr size_t HOST_FS_PATH_MAX = 4096;
+// The only file that uses <filesystem> (STYLE.md). Every call takes a
+// std::error_code: those overloads report errors there and never throw
+// (we build with -fno-exceptions).
+
+// Our paths are UTF-8. A path built from plain char text uses the system's
+// narrow encoding, which isn't UTF-8 on Windows; char8_t text is always read
+// as UTF-8 (C++20). Same bytes, so the cast through void* is exact.
+static std::filesystem::path utf8_path(const char* path)
+{
+    const char8_t* text = static_cast<const char8_t*>(static_cast<const void*>(path));
+    return std::filesystem::path(text);
+}
+
+// fopen with a UTF-8 path: Windows needs the UTF-16 one (_wfopen).
+static FILE* open_file(const std::filesystem::path* path, bool for_writing)
+{
+#if defined(_WIN32)
+    return _wfopen(path->c_str(), for_writing ? L"wb" : L"rb");
+#else
+    return std::fopen(path->c_str(), for_writing ? "wb" : "rb");
+#endif
+}
 
 // Windows also accepts '\\' as a separator.
 static bool is_separator(char c)
@@ -28,55 +43,29 @@ static bool is_separator(char c)
 
 bool host_fs_exists(const char* path)
 {
-#if defined(_WIN32)
-    return _access(path, 0) == 0;
-#else
-    struct stat info;
-    return stat(path, &info) == 0;
-#endif
-}
-
-static bool make_one_directory(const char* path)
-{
-#if defined(_WIN32)
-    int result = _mkdir(path);
-#else
-    int result = mkdir(path, 0755);
-#endif
-    return result == 0 || errno == EEXIST;
+    std::error_code error;
+    return std::filesystem::exists(utf8_path(path), error);
 }
 
 bool host_fs_make_directories(const char* path)
 {
-    char partial[HOST_FS_PATH_MAX] = {};
-    size_t length = std::strlen(path);
-    if (length == 0 || length >= sizeof(partial))
+    if (path[0] == '\0')
     {
-        host_log(LogLevel::error, "Directory path empty or too long: %s", path);
+        host_log(LogLevel::error, "Empty directory path");
         return false;
     }
-    std::memcpy(partial, path, length + 1);
-
-    // Create each parent in turn by cutting the string at every separator
-    // (skipping the leading one of an absolute path).
-    for (size_t i = 1; i < length; i++)
+    std::filesystem::path directory = utf8_path(path);
+    std::error_code error;
+    // Returns false without an error when it already exists.
+    std::filesystem::create_directories(directory, error);
+    if (error)
     {
-        if (!is_separator(partial[i]))
-        {
-            continue;
-        }
-        char saved = partial[i];
-        partial[i] = '\0';
-        if (!make_one_directory(partial))
-        {
-            host_log(LogLevel::error, "Could not create directory %s: %s", partial, std::strerror(errno));
-            return false;
-        }
-        partial[i] = saved;
+        host_log(LogLevel::error, "Could not create directory %s: %s", path, error.message().c_str());
+        return false;
     }
-    if (!make_one_directory(partial))
+    if (!std::filesystem::is_directory(directory, error))
     {
-        host_log(LogLevel::error, "Could not create directory %s: %s", partial, std::strerror(errno));
+        host_log(LogLevel::error, "Not a directory: %s", path);
         return false;
     }
     return true;
@@ -87,78 +76,68 @@ bool host_fs_read_file(const char* path, uint8_t** data, size_t* size)
     *data = nullptr;
     *size = 0;
 
-    FILE* file = std::fopen(path, "rb");
+    std::filesystem::path file_path = utf8_path(path);
+    std::error_code error;
+    uintmax_t file_size = std::filesystem::file_size(file_path, error);
+    if (error)
+    {
+        host_log(LogLevel::error, "Could not get the size of %s: %s", path, error.message().c_str());
+        return false;
+    }
+    if (file_size > SIZE_MAX)
+    {
+        host_log(LogLevel::error, "File too big: %s", path);
+        return false;
+    }
+
+    FILE* file = open_file(&file_path, false);
     if (file == nullptr)
     {
         host_log(LogLevel::error, "Could not open %s", path);
         return false;
     }
 
-    if (std::fseek(file, 0, SEEK_END) != 0)
-    {
-        host_log(LogLevel::error, "Could not seek in %s", path);
-        std::fclose(file);
-        return false;
-    }
-    long end = std::ftell(file);
-    if (end < 0)
-    {
-        host_log(LogLevel::error, "Could not get the size of %s", path);
-        std::fclose(file);
-        return false;
-    }
-    std::rewind(file);
-
-    size_t file_size = static_cast<size_t>(end);
+    size_t length = static_cast<size_t>(file_size);
     // new[] of size 0 is valid, but a 1-byte buffer keeps "data != nullptr" true.
-    uint8_t* buffer = new uint8_t[file_size > 0 ? file_size : 1];
-
-    size_t read = std::fread(buffer, 1, file_size, file);
+    uint8_t* buffer = new uint8_t[length > 0 ? length : 1];
+    size_t read = std::fread(buffer, 1, length, file);
     std::fclose(file);
 
-    if (read != file_size)
+    if (read != length)
     {
-        host_log(LogLevel::error, "Short read on %s (%zu of %zu bytes)", path, read, file_size);
+        host_log(LogLevel::error, "Short read on %s (%zu of %zu bytes)", path, read, length);
         delete[] buffer;
         return false;
     }
 
     *data = buffer;
-    *size = file_size;
+    *size = length;
     return true;
 }
 
 bool host_fs_write_file(const char* path, const void* data, size_t size)
 {
-    // Parent directory first.
-    char directory[HOST_FS_PATH_MAX] = {};
-    size_t length = std::strlen(path);
-    if (length >= sizeof(directory) - 4)   // room for ".tmp"
+    std::filesystem::path file_path = utf8_path(path);
+    std::error_code error;
+
+    std::filesystem::path directory = file_path.parent_path();
+    if (!directory.empty())
     {
-        host_log(LogLevel::error, "Path too long: %s", path);
-        return false;
-    }
-    std::memcpy(directory, path, length + 1);
-    for (size_t i = length; i > 0; i--)
-    {
-        if (is_separator(directory[i - 1]))
+        std::filesystem::create_directories(directory, error);
+        if (error)
         {
-            directory[i - 1] = '\0';
-            if (directory[0] != '\0' && !host_fs_make_directories(directory))
-            {
-                return false;
-            }
-            break;
+            host_log(LogLevel::error, "Could not create the directory for %s: %s", path, error.message().c_str());
+            return false;
         }
     }
 
-    char temporary[HOST_FS_PATH_MAX] = {};
-    std::snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+    std::filesystem::path temporary = file_path;
+    temporary += ".tmp";
 
-    FILE* file = std::fopen(temporary, "wb");
+    FILE* file = open_file(&temporary, true);
     if (file == nullptr)
     {
-        host_log(LogLevel::error, "Could not create %s: %s", temporary, std::strerror(errno));
+        host_log(LogLevel::error, "Could not create %s.tmp", path);
         return false;
     }
     bool ok = size == 0 || std::fwrite(data, 1, size, file) == size;
@@ -166,20 +145,18 @@ bool host_fs_write_file(const char* path, const void* data, size_t size)
     ok = std::fclose(file) == 0 && ok;
     if (!ok)
     {
-        host_log(LogLevel::error, "Could not write %s", temporary);
-        std::remove(temporary);
+        host_log(LogLevel::error, "Could not write %s.tmp", path);
+        std::filesystem::remove(temporary, error);
         return false;
     }
 
-#if defined(_WIN32)
-    // rename() on Windows refuses to replace an existing file. Removing first
-    // leaves a short window without the old file; the .tmp copy is complete by then.
-    std::remove(path);
-#endif
-    if (std::rename(temporary, path) != 0)
+    // Replaces an existing file in one step, on Windows too (MoveFileExW).
+    std::filesystem::rename(temporary, file_path, error);
+    if (error)
     {
-        host_log(LogLevel::error, "Could not replace %s: %s", path, std::strerror(errno));
-        std::remove(temporary);
+        host_log(LogLevel::error, "Could not replace %s: %s", path, error.message().c_str());
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
         return false;
     }
     return true;
