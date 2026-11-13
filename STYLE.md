@@ -26,13 +26,19 @@ and is built without our warning flags.
 - `new[]`/`delete[]` for short-lived scratch arrays in one function, freed in the same function.
   Prefer fixed-size arrays with a named `MAX_` constant when there is a sane limit.
 - `std::vector`, `std::string` and `std::string_view` outside hot paths (see
-  below), in `.cpp` files and in headers inside one component (frontend_common,
-  piccolo, multitap). Walk them with an index: `for (size_t i = 0; i < v.size(); i++)`.
+  below), in `.cpp` files and headers. Walk them with an index: `for (size_t i = 0; i < v.size(); i++)`.
   Pass them like any struct: pointers for out-parameters, `const` pointers for input.
 - `<algorithm>` (`std::sort`, `std::find`, ...) outside hot paths, with a named
   `static` function as comparator.
 - *Using* the library's member functions and operators (`v.size()`,
   `v.push_back(x)`, `a == b` on strings). What's not allowed is writing our own.
+- `<filesystem>` only inside `hosts/common/host_fs.cpp`; everything else calls
+  `host_fs_*` (plain `bool` results, errors logged). Exceptions stay off: inside
+  `host_fs` only the overloads that take a `std::error_code` are used (they
+  report the error there and never throw; the others would abort the program
+  under `-fno-exceptions`). Paths are built from our UTF-8 strings through
+  `char8_t` (C++20): a `path` from a plain `std::string` uses the system's
+  narrow encoding, which is not UTF-8 on Windows.
 - Structs whose members are STL types get a destructor and copying from the
   compiler: that's fine ("rule of zero"). We never write them ourselves.
 
@@ -49,11 +55,9 @@ and is built without our warning flags.
 - C-style casts. Implicit narrowing or sign conversion (`-Wconversion -Wsign-conversion`).
 - Hidden global state. If a library forces it (libretro callbacks carry no
   userdata), keep it in one place, document why, and assert it is set.
-- STL in the host/frontend protocol (plain C, crosses processes) and in the
-  public headers of `host_common` and the hosts (they may end up in another
-  process or a separately built library). Inside their `.cpp` files it's fine.
+- STL in the host/frontend protocol (plain C, crosses processes).
 - Other STL containers (`std::unordered_map`, `std::map`, ...), smart pointers
-  and iterators: only where a spec says so. A vector with a linear or sorted
+  and iterators (beyond `erase()`): only where a spec says so. A vector with a linear or sorted
   search covers almost everything.
 
 ## Hot paths
