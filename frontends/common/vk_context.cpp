@@ -459,6 +459,8 @@ static bool create_imgui_descriptor_pool(VulkanContext* context)
 // have the extension but not support it on every window system).
 static uint32_t find_present_wait(const VulkanContext* context, VkSurfaceKHR surface)
 {
+    // Only present wait 2 asks the surface; headers without it never use it.
+    (void)surface;
     VkPhysicalDevice physical_device = context->physical_device;
 #if defined(VK_KHR_present_wait2)
     if (context->surface_capabilities2 &&
