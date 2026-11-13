@@ -4,6 +4,33 @@
 # code. Links host_common for its file helpers (host_fs: atomic writes); the
 # other direction (hosts using frontend or SDL code) is what's not allowed.
 
+# libsamplerate (deps/, BSD-2-Clause): audio_output's resampler, chosen by
+# measurement (tools/resampler_measure.cpp). Built from its sources without
+# our warning flags; it wants a generated config.h: ours, in the build folder.
+set(LIBSAMPLERATE_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/libsamplerate_config")
+file(WRITE "${LIBSAMPLERATE_CONFIG}/config.h"
+     "#define PACKAGE \"libsamplerate\"\n#define VERSION \"0.2.2\"\n"
+     "#define CPU_CLIPS_NEGATIVE 0\n#define CPU_CLIPS_POSITIVE 0\n"
+     "#define HAVE_STDBOOL_H 1\n#define HAVE_STDINT_H 1\n"
+     "#define ENABLE_SINC_FAST_CONVERTER 1\n#define ENABLE_SINC_MEDIUM_CONVERTER 1\n"
+     "#define ENABLE_SINC_BEST_CONVERTER 1\n")
+add_library(multitap_dep_libsamplerate STATIC
+    "${CMAKE_SOURCE_DIR}/deps/libsamplerate/src/samplerate.c"
+    "${CMAKE_SOURCE_DIR}/deps/libsamplerate/src/src_linear.c"
+    "${CMAKE_SOURCE_DIR}/deps/libsamplerate/src/src_sinc.c"
+    "${CMAKE_SOURCE_DIR}/deps/libsamplerate/src/src_zoh.c")
+target_include_directories(multitap_dep_libsamplerate SYSTEM PUBLIC "${CMAKE_SOURCE_DIR}/deps/libsamplerate/include")
+target_include_directories(multitap_dep_libsamplerate PRIVATE "${LIBSAMPLERATE_CONFIG}")
+target_compile_definitions(multitap_dep_libsamplerate PRIVATE HAVE_CONFIG_H)
+# Optimized even in Debug builds: it runs for every audio frame and we don't debug it.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(multitap_dep_libsamplerate PRIVATE -O2)
+endif()
+find_library(MATH_LIBRARY m)
+if(MATH_LIBRARY)
+    target_link_libraries(multitap_dep_libsamplerate PUBLIC ${MATH_LIBRARY})
+endif()
+
 add_library(frontend_common STATIC
     vk_context.cpp
     vk_swapchain.cpp
@@ -23,7 +50,7 @@ add_library(frontend_common STATIC
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(frontend_common PUBLIC imgui SDL3::SDL3 Vulkan::Vulkan host_common)
+target_link_libraries(frontend_common PUBLIC imgui SDL3::SDL3 Vulkan::Vulkan host_common multitap_dep_libsamplerate)
 
 # Vulkan validation layers + debug messenger are enabled in Debug builds only.
 target_compile_definitions(frontend_common PRIVATE $<$<CONFIG:Debug>:MULTITAP_VULKAN_VALIDATION=1>)
@@ -96,23 +123,6 @@ if(MULTITAP_BUILD_TESTS)
     # this tool. The one chosen moves into the real audio path later.
     set(MULTITAP_DEPS "${CMAKE_SOURCE_DIR}/deps")
 
-    # libsamplerate wants a generated config.h: ours, in the build folder.
-    set(LIBSAMPLERATE_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/libsamplerate_config")
-    file(WRITE "${LIBSAMPLERATE_CONFIG}/config.h"
-         "#define PACKAGE \"libsamplerate\"\n#define VERSION \"0.2.2\"\n"
-         "#define CPU_CLIPS_NEGATIVE 0\n#define CPU_CLIPS_POSITIVE 0\n"
-         "#define HAVE_STDBOOL_H 1\n#define HAVE_STDINT_H 1\n"
-         "#define ENABLE_SINC_FAST_CONVERTER 1\n#define ENABLE_SINC_MEDIUM_CONVERTER 1\n"
-         "#define ENABLE_SINC_BEST_CONVERTER 1\n")
-    add_library(multitap_dep_libsamplerate STATIC
-        "${MULTITAP_DEPS}/libsamplerate/src/samplerate.c"
-        "${MULTITAP_DEPS}/libsamplerate/src/src_linear.c"
-        "${MULTITAP_DEPS}/libsamplerate/src/src_sinc.c"
-        "${MULTITAP_DEPS}/libsamplerate/src/src_zoh.c")
-    target_include_directories(multitap_dep_libsamplerate SYSTEM PUBLIC "${MULTITAP_DEPS}/libsamplerate/include")
-    target_include_directories(multitap_dep_libsamplerate PRIVATE "${LIBSAMPLERATE_CONFIG}")
-    target_compile_definitions(multitap_dep_libsamplerate PRIVATE HAVE_CONFIG_H)
-
     # speexdsp: only its resampler, built standalone with our own symbol prefix.
     add_library(multitap_dep_speex_resampler STATIC "${MULTITAP_DEPS}/speexdsp/libspeexdsp/resample.c")
     target_include_directories(multitap_dep_speex_resampler SYSTEM PUBLIC "${MULTITAP_DEPS}/speexdsp/include/speex")
@@ -127,8 +137,7 @@ if(MULTITAP_BUILD_TESTS)
         "${MULTITAP_DEPS}/libretro-common/memmap/memalign.c")
     target_include_directories(multitap_dep_retro_sinc SYSTEM PUBLIC "${MULTITAP_DEPS}/libretro-common/include")
 
-    find_library(MATH_LIBRARY m)
-    foreach(dep multitap_dep_libsamplerate multitap_dep_speex_resampler multitap_dep_retro_sinc)
+    foreach(dep multitap_dep_speex_resampler multitap_dep_retro_sinc)
         if(MATH_LIBRARY)
             target_link_libraries(${dep} PUBLIC ${MATH_LIBRARY})
         endif()

@@ -1,8 +1,16 @@
 #pragma once
 
 // Audio output for frontends: one SDL audio stream on the default playback
-// device. Takes interleaved stereo int16 at the core's sample rate; SDL
-// resamples it once, straight to whatever rate the device runs at.
+// device. Takes interleaved stereo int16 at the core's sample rate.
+//
+// The path (decided 2026-11-13, plan-milestones milestone 2):
+//   core int16 -> float -> [DSP stage: empty for now; EQ / filters later]
+//   -> libsamplerate (sinc, medium quality) at core rate x speed -> device rate
+//   -> SDL stream, which only converts the sample format (same rate both sides).
+// libsamplerate was chosen by measurement over SDL3's own resampler, speexdsp
+// and libretro-common's sinc (tools/resampler_measure.cpp): clean high
+// frequencies, strong alias/image rejection, and built for a ratio that
+// changes all the time, which is what rate control does.
 //
 // Speed (audio_output_set_speed), following the frontend's timing mode
 // (decided 2026-11-12):
@@ -13,9 +21,8 @@
 // Both modes add dynamic rate control (DRC) on top: a correction of at most
 // AUDIO_OUTPUT_DRC_MAX_DEVIATION that keeps the queue near
 // AUDIO_OUTPUT_DRC_TARGET_MS. In Exact mode it absorbs the drift between the
-// frame timer's clock and the audio device's clock (tens of ppm). All through
-// SDL's own resampler (SDL_SetAudioStreamFrequencyRatio); an own resampler can
-// replace it here later.
+// frame timer's clock and the audio device's clock (tens of ppm). The speed
+// goes into libsamplerate's ratio.
 //
 // Safety nets for whatever is left (stalls, a hidden window):
 //   - too much queued (above AUDIO_OUTPUT_MAX_QUEUED_MS): drop the new audio;
@@ -34,8 +41,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 struct SDL_AudioStream;
+struct SRC_STATE_tag;
 
 constexpr uint32_t AUDIO_OUTPUT_MAX_QUEUED_MS    = 150;
 constexpr uint32_t AUDIO_OUTPUT_START_SILENCE_MS = 50;
@@ -51,23 +60,30 @@ constexpr double   AUDIO_OUTPUT_DRC_MAX_DEVIATION = 0.005;
 struct AudioOutput
 {
     SDL_AudioStream* stream          = nullptr;
-    bool             subsystem_ready = false;   // we called SDL_InitSubSystem(SDL_INIT_AUDIO)
-    int32_t          sample_rate     = 0;       // what the stream expects from us (Hz, rounded)
-    bool             started         = false;   // something was pushed since create/clear
-    uint32_t         pushes          = 0;       // pushes since create/clear (for the warm-up)
+    SRC_STATE_tag*   resampler       = nullptr;   // libsamplerate
+    bool             subsystem_ready = false;     // we called SDL_InitSubSystem(SDL_INIT_AUDIO)
+    double           core_rate       = 0.0;       // what the core gives us (Hz, may be fractional)
+    int32_t          device_rate     = 0;         // what the stream (and device) takes (Hz)
+    int32_t          sample_rate     = 0;         // core_rate rounded, for debug UIs
+    bool             started         = false;     // something was pushed since create/clear
+    uint32_t         pushes          = 0;         // pushes since create/clear (for the warm-up)
 
     // Playback speed: base_ratio x (DRC correction when rate_control is on).
-    // SDL resamples by this ratio on top of the core rate -> device rate conversion.
     double           base_ratio      = 1.0;
     bool             rate_control    = false;
-    double           current_ratio   = 1.0;     // what's set on the stream now (for debug UIs)
+    double           current_ratio   = 1.0;       // the speed in use now (for debug UIs)
+
+    // Scratch buffers for the float path, sized at create; they only grow if
+    // a core pushes a bigger block than expected (not every frame).
+    std::vector<float> input;
+    std::vector<float> output;
 
     // Statistics for debug UIs.
     uint64_t underruns      = 0;   // times the queue ran dry while playing
     uint64_t dropped_frames = 0;   // stereo frames thrown away because the queue was full
 };
 
-// sample_rate is the core's (it may be fractional, e.g. 32040.5 Hz; we round it).
+// sample_rate is the core's (it may be fractional, e.g. 32040.5 Hz).
 // Returns false (and logs why) if no audio device could be opened; the frontend
 // can keep running without sound.
 bool audio_output_create(AudioOutput* output, double sample_rate);
