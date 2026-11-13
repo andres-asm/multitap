@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "host_fs.h"
 #include "settings_file.h"
@@ -40,32 +41,16 @@ static void parse_string(SettingsFile* file, const char* text)
     settings_file_parse(file, text, std::strlen(text), "test");
 }
 
-// The text form of `file` as a NUL-terminated new[] string.
-static char* text_of(const SettingsFile* file, const char* header)
-{
-    char* text = nullptr;
-    size_t size = 0;
-    if (!settings_file_to_text(file, header, &text, &size))
-    {
-        return nullptr;
-    }
-    char* terminated = new char[size + 1];
-    std::memcpy(terminated, text, size);
-    terminated[size] = '\0';
-    delete[] text;
-    return terminated;
-}
-
 static void check_text(const SettingsFile* file, const char* header, const char* expected, const char* what)
 {
-    char* text = text_of(file, header);
-    bool same = text != nullptr && std::strcmp(text, expected) == 0;
+    std::string text;
+    settings_file_to_text(file, header, &text);
+    bool same = text == expected;
     check(same, what);
     if (!same)
     {
-        std::printf("--- expected:\n%s--- got:\n%s---\n", expected, text != nullptr ? text : "(null)");
+        std::printf("--- expected:\n%s--- got:\n%s---\n", expected, text.c_str());
     }
-    delete[] text;
 }
 
 static void test_basic_rules()
@@ -95,8 +80,7 @@ static void test_basic_rules()
     check_value(&file, "core:snes9x", "video_aspect", "8:7");
     check_value(&file, "game:snes9x/Super Mario World (USA)", "video_scaling", "integer_over");
     check_value(&file, "game:snes9x/Super Mario World (USA)", "video_aspect", nullptr);
-    check(file.section_count == 3, "three sections (global, core, game)");
-    settings_file_destroy(&file);
+    check(file.sections.size() == 3, "three sections (global, core, game)");
 }
 
 static void test_section_names()
@@ -125,7 +109,6 @@ static void test_section_names()
     check_value(&file, "core:snes9x", "lost", nullptr);
     check(settings_file_find_section(&file, "broken header") < 0, "a header without ']' makes no section");
     check(settings_file_find_section(&file, "game:snes9x/Pang [b]") == 1, "a repeated header continues the section");
-    settings_file_destroy(&file);
 }
 
 static void test_utf8()
@@ -137,7 +120,6 @@ static void test_utf8()
                  "título = Pokémon\n");
     check_value(&file, "", "nombre", "Ñandú ¿qué? ¡sí!");
     check_value(&file, "game:mgba/Pokémon ポケモン (日本)", "título", "Pokémon");
-    settings_file_destroy(&file);
 }
 
 static void test_round_trip()
@@ -169,21 +151,16 @@ static void test_round_trip()
                "written text matches the expected layout");
 
     // Write, read back, write again: the same text both times.
-    char* first = text_of(&file, "header");
+    std::string first;
+    settings_file_to_text(&file, "header", &first);
     SettingsFile again = {};
-    if (first != nullptr)
-    {
-        parse_string(&again, first);
-    }
-    char* second = text_of(&again, "header");
-    check(first != nullptr && second != nullptr && std::strcmp(first, second) == 0, "round trip is stable");
+    parse_string(&again, first.c_str());
+    std::string second;
+    settings_file_to_text(&again, "header", &second);
+    check(first == second, "round trip is stable");
     check_value(&again, "", "some_future_key", "from a newer version");
     check_value(&again, "core:snes9x", "unknown_core_thing", "42");
     check_value(&again, "game:snes9x/Pang [b]", "video_scaling", "integer_over");
-    delete[] first;
-    delete[] second;
-    settings_file_destroy(&again);
-    settings_file_destroy(&file);
 
     SettingsFile empty = {};
     check_text(&empty, nullptr, "", "an empty file writes nothing");
@@ -231,8 +208,12 @@ static void test_set_get_remove()
     }
     check_value(&file, "game:core/Game 39", "key_39", "key_39");
     check_value(&file, "game:core/Game 0", "key_0", "key_0");
-    settings_file_destroy(&file);
-    check(file.section_count == 0 && file.sections == nullptr, "destroy leaves an empty file");
+
+    // Copies are independent (the struct copies its strings).
+    SettingsFile copy = file;
+    settings_file_set(&copy, "", "video_filter", "bilinear");
+    check_value(&file, "", "video_filter", "nearest");
+    check_value(&copy, "", "video_filter", "bilinear");
 }
 
 static void test_save_and_load(const char* directory)
@@ -248,8 +229,7 @@ static void test_save_and_load(const char* directory)
     SettingsFile missing = {};
     check(settings_file_set(&missing, "", "stale", "value"), "set before loading a missing file");
     check(settings_file_load(&missing, "/nonexistent/multitap/settings.cfg"), "loading a missing file succeeds");
-    check(missing.section_count == 0, "a missing file loads empty");
-    settings_file_destroy(&missing);
+    check(missing.sections.empty(), "a missing file loads empty");
 
     SettingsFile file = {};
     settings_file_set(&file, "", "video_aspect", "core");
@@ -265,8 +245,6 @@ static void test_save_and_load(const char* directory)
     check(settings_file_load(&loaded, path), "load the saved file");
     check_value(&loaded, "", "video_aspect", "4:3");
     check_value(&loaded, "game:mgba/Pokémon ポケモン", "video_scaling", "auto");
-    settings_file_destroy(&loaded);
-    settings_file_destroy(&file);
 }
 
 int main(int argc, char** argv)

@@ -29,31 +29,27 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 struct SettingsFileEntry
 {
-    char* key = nullptr;     // new[], owned
-    char* value = nullptr;   // new[], owned
+    std::string key;
+    std::string value;
 };
 
 struct SettingsFileSection
 {
-    char* name = nullptr;    // new[], owned; "" for the global section
-    SettingsFileEntry* entries = nullptr;
-    uint32_t entry_count = 0;
-    uint32_t entry_capacity = 0;
+    std::string name;   // "" for the global section
+    std::vector<SettingsFileEntry> entries;
 };
 
-// A zero-initialized SettingsFile is an empty file, ready to use.
+// An empty SettingsFile (SettingsFile file = {};) is an empty file, ready to
+// use. Copying one copies everything; nothing needs freeing.
 struct SettingsFile
 {
-    SettingsFileSection* sections = nullptr;
-    uint32_t section_count = 0;
-    uint32_t section_capacity = 0;
+    std::vector<SettingsFileSection> sections;
 };
-
-// Frees everything; the file is empty (and usable) afterwards.
-void settings_file_destroy(SettingsFile* file);
 
 // Replaces the contents with what `text` holds. Malformed lines are logged
 // (with `source_name` and the line number) and skipped; they don't fail.
@@ -63,16 +59,15 @@ void settings_file_parse(SettingsFile* file, const char* text, size_t size, cons
 // (first run). Fails only if the file exists but can't be read.
 bool settings_file_load(SettingsFile* file, const char* path);
 
-// The file as text, in a new[] buffer the caller owns (delete[]), not
-// NUL-terminated. `header` (may be nullptr) is written as "# " comment lines
-// at the top, one per "\n"-separated line.
-bool settings_file_to_text(const SettingsFile* file, const char* header, char** text, size_t* size);
+// The file as text. `header` (may be nullptr) is written as "# " comment
+// lines at the top, one per "\n"-separated line.
+void settings_file_to_text(const SettingsFile* file, const char* header, std::string* text);
 
 // Writes the file with host_fs's atomic write (never left half-written).
 bool settings_file_save(const SettingsFile* file, const char* path, const char* header);
 
 // The value of `key` in `section` ("" = global), or nullptr if it isn't set.
-// The pointer stays valid until the entry is changed or removed.
+// The pointer stays valid until the file is changed.
 const char* settings_file_get(const SettingsFile* file, const char* section, const char* key);
 
 // Sets (adds or replaces) a value, creating the section if needed. Refuses
@@ -86,6 +81,5 @@ bool settings_file_set(SettingsFile* file, const char* section, const char* key,
 // Removes one key. Returns true if it was there.
 bool settings_file_remove(SettingsFile* file, const char* section, const char* key);
 
-// Index of `section`, or -1 if it doesn't exist. For walking every key of a
-// section through file->sections[index].entries.
+// Index of `section` in file->sections, or -1 if it doesn't exist.
 int32_t settings_file_find_section(const SettingsFile* file, const char* section);

@@ -1,13 +1,11 @@
 #include "settings_file.h"
 
 #include <cstring>
+#include <string_view>
 
 #include <SDL3/SDL.h>
 
 #include "host_fs.h"
-
-// Arrays start this big and double when full.
-constexpr uint32_t SETTINGS_FILE_FIRST_CAPACITY = 8;
 
 // ---------------------------------------------------------------------------
 // Small string helpers
@@ -23,33 +21,25 @@ static bool is_line_break(char c)
     return c == '\n' || c == '\r';
 }
 
-// [begin, begin + length) as a new[] NUL-terminated string.
-static char* copy_string(const char* begin, size_t length)
+// Drops blanks on both sides.
+static std::string_view trim(std::string_view text)
 {
-    char* copy = new char[length + 1];
-    std::memcpy(copy, begin, length);
-    copy[length] = '\0';
-    return copy;
+    while (!text.empty() && is_blank(text.front()))
+    {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() && is_blank(text.back()))
+    {
+        text.remove_suffix(1);
+    }
+    return text;
 }
 
-// Narrows [*begin, *end) to drop blanks on both sides.
-static void trim(const char** begin, const char** end)
+static bool has_line_break(std::string_view text)
 {
-    while (*begin < *end && is_blank(**begin))
+    for (size_t i = 0; i < text.size(); i++)
     {
-        (*begin)++;
-    }
-    while (*end > *begin && is_blank(*(*end - 1)))
-    {
-        (*end)--;
-    }
-}
-
-static bool has_line_break(const char* text)
-{
-    for (const char* c = text; *c != '\0'; c++)
-    {
-        if (is_line_break(*c))
+        if (is_line_break(text[i]))
         {
             return true;
         }
@@ -57,49 +47,20 @@ static bool has_line_break(const char* text)
     return false;
 }
 
-static bool has_outer_blanks(const char* text)
+static bool has_outer_blanks(std::string_view text)
 {
-    size_t length = std::strlen(text);
-    return length > 0 && (is_blank(text[0]) || is_blank(text[length - 1]));
-}
-
-// Same text as [begin, begin + length)?
-static bool equals(const char* text, const char* begin, size_t length)
-{
-    return std::strncmp(text, begin, length) == 0 && text[length] == '\0';
+    return !text.empty() && (is_blank(text.front()) || is_blank(text.back()));
 }
 
 // ---------------------------------------------------------------------------
 // Sections and entries
 // ---------------------------------------------------------------------------
 
-static void free_section(SettingsFileSection* section)
+static int32_t find_section(const SettingsFile* file, std::string_view name)
 {
-    for (uint32_t i = 0; i < section->entry_count; i++)
+    for (size_t i = 0; i < file->sections.size(); i++)
     {
-        delete[] section->entries[i].key;
-        delete[] section->entries[i].value;
-    }
-    delete[] section->entries;
-    delete[] section->name;
-    *section = SettingsFileSection{};
-}
-
-void settings_file_destroy(SettingsFile* file)
-{
-    for (uint32_t i = 0; i < file->section_count; i++)
-    {
-        free_section(&file->sections[i]);
-    }
-    delete[] file->sections;
-    *file = SettingsFile{};
-}
-
-static int32_t find_section(const SettingsFile* file, const char* name, size_t length)
-{
-    for (uint32_t i = 0; i < file->section_count; i++)
-    {
-        if (equals(file->sections[i].name, name, length))
+        if (file->sections[i].name == name)
         {
             return static_cast<int32_t>(i);
         }
@@ -109,43 +70,29 @@ static int32_t find_section(const SettingsFile* file, const char* name, size_t l
 
 int32_t settings_file_find_section(const SettingsFile* file, const char* section)
 {
-    return find_section(file, section, std::strlen(section));
+    return find_section(file, section);
 }
 
-// The section called [name, name + length), created at the end if missing.
-static SettingsFileSection* get_or_add_section(SettingsFile* file, const char* name, size_t length)
+// The section called `name`, created at the end if missing. The pointer is
+// valid until the next section is added.
+static SettingsFileSection* get_or_add_section(SettingsFile* file, std::string_view name)
 {
-    int32_t index = find_section(file, name, length);
+    int32_t index = find_section(file, name);
     if (index >= 0)
     {
-        return &file->sections[index];
+        return &file->sections[static_cast<size_t>(index)];
     }
-
-    if (file->section_count == file->section_capacity)
-    {
-        uint32_t capacity = file->section_capacity == 0 ? SETTINGS_FILE_FIRST_CAPACITY : file->section_capacity * 2;
-        SettingsFileSection* sections = new SettingsFileSection[capacity];
-        for (uint32_t i = 0; i < file->section_count; i++)
-        {
-            sections[i] = file->sections[i];
-        }
-        delete[] file->sections;
-        file->sections = sections;
-        file->section_capacity = capacity;
-    }
-
-    SettingsFileSection* section = &file->sections[file->section_count];
-    file->section_count++;
-    *section = SettingsFileSection{};
-    section->name = copy_string(name, length);
-    return section;
+    SettingsFileSection section = {};
+    section.name = name;
+    file->sections.push_back(section);
+    return &file->sections.back();
 }
 
-static int32_t find_entry(const SettingsFileSection* section, const char* key, size_t length)
+static int32_t find_entry(const SettingsFileSection* section, std::string_view key)
 {
-    for (uint32_t i = 0; i < section->entry_count; i++)
+    for (size_t i = 0; i < section->entries.size(); i++)
     {
-        if (equals(section->entries[i].key, key, length))
+        if (section->entries[i].key == key)
         {
             return static_cast<int32_t>(i);
         }
@@ -153,36 +100,19 @@ static int32_t find_entry(const SettingsFileSection* section, const char* key, s
     return -1;
 }
 
-// Adds or replaces. Strings are [begin, begin + length) ranges.
-static void put_entry(SettingsFileSection* section, const char* key, size_t key_length, const char* value,
-                      size_t value_length)
+// Adds or replaces.
+static void put_entry(SettingsFileSection* section, std::string_view key, std::string_view value)
 {
-    int32_t index = find_entry(section, key, key_length);
+    int32_t index = find_entry(section, key);
     if (index >= 0)
     {
-        SettingsFileEntry* entry = &section->entries[index];
-        delete[] entry->value;
-        entry->value = copy_string(value, value_length);
+        section->entries[static_cast<size_t>(index)].value = value;
         return;
     }
-
-    if (section->entry_count == section->entry_capacity)
-    {
-        uint32_t capacity = section->entry_capacity == 0 ? SETTINGS_FILE_FIRST_CAPACITY : section->entry_capacity * 2;
-        SettingsFileEntry* entries = new SettingsFileEntry[capacity];
-        for (uint32_t i = 0; i < section->entry_count; i++)
-        {
-            entries[i] = section->entries[i];
-        }
-        delete[] section->entries;
-        section->entries = entries;
-        section->entry_capacity = capacity;
-    }
-
-    SettingsFileEntry* entry = &section->entries[section->entry_count];
-    section->entry_count++;
-    entry->key = copy_string(key, key_length);
-    entry->value = copy_string(value, value_length);
+    SettingsFileEntry entry = {};
+    entry.key = key;
+    entry.value = value;
+    section->entries.push_back(entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,98 +121,87 @@ static void put_entry(SettingsFileSection* section, const char* key, size_t key_
 
 void settings_file_parse(SettingsFile* file, const char* text, size_t size, const char* source_name)
 {
-    settings_file_destroy(file);
-
-    const char* cursor = text;
-    const char* text_end = text + size;
+    *file = SettingsFile{};
+    std::string_view rest(text, size);
 
     // Editors on Windows like to start UTF-8 files with a byte order mark.
-    if (size >= 3 && std::memcmp(text, "\xEF\xBB\xBF", 3) == 0)
+    if (rest.substr(0, 3) == "\xEF\xBB\xBF")
     {
-        cursor += 3;
+        rest.remove_prefix(3);
     }
 
-    // Where keys go. Starts as the global section; nullptr after a broken
-    // header, so its keys are dropped instead of landing in the wrong section.
-    SettingsFileSection* current = get_or_add_section(file, "", 0);
+    // Index of the section keys go to. Starts as the global section; -1 after
+    // a broken header, so its keys are dropped instead of landing in the
+    // wrong section. An index, not a pointer: adding sections moves them.
+    get_or_add_section(file, "");
+    int32_t current = 0;
     uint32_t line_number = 0;
 
-    while (cursor < text_end)
+    while (!rest.empty())
     {
         line_number++;
-        const char* line = cursor;
-        const char* line_end = cursor;
-        while (line_end < text_end && *line_end != '\n')
+        size_t line_end = rest.find('\n');
+        std::string_view line = rest.substr(0, line_end);
+        if (line_end == std::string_view::npos)
         {
-            line_end++;
+            rest = std::string_view();
         }
-        cursor = line_end < text_end ? line_end + 1 : text_end;
+        else
+        {
+            rest.remove_prefix(line_end + 1);
+        }
 
-        trim(&line, &line_end);
-        if (line == line_end || *line == '#')
+        line = trim(line);
+        if (line.empty() || line.front() == '#')
         {
             continue;
         }
 
-        if (*line == '[')
+        if (line.front() == '[')
         {
-            const char* close = line_end - 1;
-            while (close > line && *close != ']')
-            {
-                close--;
-            }
-            if (close == line)
+            size_t close = line.rfind(']');
+            if (close == 0 || close == std::string_view::npos)
             {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s:%u: section header without ']', its keys are ignored",
                             source_name, line_number);
-                current = nullptr;
+                current = -1;
                 continue;
             }
-            if (close + 1 != line_end)
+            if (close + 1 != line.size())
             {
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s:%u: text after the section header ignored",
                             source_name, line_number);
             }
-            const char* name = line + 1;
-            const char* name_end = close;
-            trim(&name, &name_end);
-            current = get_or_add_section(file, name, static_cast<size_t>(name_end - name));
+            std::string_view name = trim(line.substr(1, close - 1));
+            get_or_add_section(file, name);
+            current = find_section(file, name);
             continue;
         }
 
-        const char* equal_sign = line;
-        while (equal_sign < line_end && *equal_sign != '=')
-        {
-            equal_sign++;
-        }
-        if (equal_sign == line_end)
+        size_t equal_sign = line.find('=');
+        if (equal_sign == std::string_view::npos)
         {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s:%u: line without '=' ignored", source_name, line_number);
             continue;
         }
-
-        const char* key = line;
-        const char* key_end = equal_sign;
-        trim(&key, &key_end);
-        const char* value = equal_sign + 1;
-        const char* value_end = line_end;
-        trim(&value, &value_end);
-        if (key == key_end)
+        std::string_view key = trim(line.substr(0, equal_sign));
+        std::string_view value = trim(line.substr(equal_sign + 1));
+        if (key.empty())
         {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s:%u: empty key ignored", source_name, line_number);
             continue;
         }
-        if (current == nullptr)
+        if (current < 0)
         {
             continue;
         }
-        put_entry(current, key, static_cast<size_t>(key_end - key), value, static_cast<size_t>(value_end - value));
+        put_entry(&file->sections[static_cast<size_t>(current)], key, value);
     }
 }
 
 bool settings_file_load(SettingsFile* file, const char* path)
 {
-    settings_file_destroy(file);
+    *file = SettingsFile{};
     if (!host_fs_exists(path))
     {
         return true;
@@ -305,121 +224,71 @@ bool settings_file_load(SettingsFile* file, const char* path)
 // Writing
 // ---------------------------------------------------------------------------
 
-// Appends `length` bytes at *position. With out == nullptr it only counts,
-// so the same code measures the text first and then writes it.
-static void append(char* out, size_t* position, const char* text, size_t length)
+static void write_entries(std::string* text, const SettingsFileSection* section)
 {
-    if (out != nullptr)
+    for (size_t i = 0; i < section->entries.size(); i++)
     {
-        std::memcpy(out + *position, text, length);
-    }
-    *position += length;
-}
-
-static void append_string(char* out, size_t* position, const char* text)
-{
-    append(out, position, text, std::strlen(text));
-}
-
-static void write_entries(char* out, size_t* position, const SettingsFileSection* section)
-{
-    for (uint32_t i = 0; i < section->entry_count; i++)
-    {
-        append_string(out, position, section->entries[i].key);
-        append_string(out, position, " = ");
-        append_string(out, position, section->entries[i].value);
-        append_string(out, position, "\n");
+        text->append(section->entries[i].key);
+        text->append(" = ");
+        text->append(section->entries[i].value);
+        text->append("\n");
     }
 }
 
-// Returns the number of bytes written (or that would be written).
-static size_t write_text(const SettingsFile* file, const char* header, char* out)
+void settings_file_to_text(const SettingsFile* file, const char* header, std::string* text)
 {
-    size_t position = 0;
-    bool wrote_something = false;
+    text->clear();
 
     if (header != nullptr && header[0] != '\0')
     {
-        const char* line = header;
+        std::string_view rest(header);
         while (true)
         {
-            const char* line_end = line;
-            while (*line_end != '\0' && *line_end != '\n')
-            {
-                line_end++;
-            }
-            append_string(out, &position, "# ");
-            append(out, &position, line, static_cast<size_t>(line_end - line));
-            append_string(out, &position, "\n");
-            if (*line_end == '\0')
+            size_t line_end = rest.find('\n');
+            text->append("# ");
+            text->append(rest.substr(0, line_end));
+            text->append("\n");
+            if (line_end == std::string_view::npos)
             {
                 break;
             }
-            line = line_end + 1;
+            rest.remove_prefix(line_end + 1);
         }
-        wrote_something = true;
     }
 
-    int32_t global = find_section(file, "", 0);
-    if (global >= 0 && file->sections[global].entry_count > 0)
+    int32_t global = find_section(file, "");
+    if (global >= 0 && !file->sections[static_cast<size_t>(global)].entries.empty())
     {
-        if (wrote_something)
+        if (!text->empty())
         {
-            append_string(out, &position, "\n");
+            text->append("\n");
         }
-        write_entries(out, &position, &file->sections[global]);
-        wrote_something = true;
+        write_entries(text, &file->sections[static_cast<size_t>(global)]);
     }
 
-    for (uint32_t i = 0; i < file->section_count; i++)
+    for (size_t i = 0; i < file->sections.size(); i++)
     {
         const SettingsFileSection* section = &file->sections[i];
-        if (section->name[0] == '\0' || section->entry_count == 0)
+        if (section->name.empty() || section->entries.empty())
         {
             continue;
         }
-        if (wrote_something)
+        if (!text->empty())
         {
-            append_string(out, &position, "\n");
+            text->append("\n");
         }
-        append_string(out, &position, "[");
-        append_string(out, &position, section->name);
-        append_string(out, &position, "]\n");
-        write_entries(out, &position, section);
-        wrote_something = true;
+        text->append("[");
+        text->append(section->name);
+        text->append("]\n");
+        write_entries(text, section);
     }
-    return position;
-}
-
-bool settings_file_to_text(const SettingsFile* file, const char* header, char** text, size_t* size)
-{
-    size_t length = write_text(file, header, nullptr);
-    // At least one byte so an empty file still gets a buffer to delete[].
-    char* buffer = new char[length > 0 ? length : 1];
-    size_t written = write_text(file, header, buffer);
-    if (written != length)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Settings text size changed while writing (%zu, then %zu)",
-                     length, written);
-        delete[] buffer;
-        return false;
-    }
-    *text = buffer;
-    *size = length;
-    return true;
 }
 
 bool settings_file_save(const SettingsFile* file, const char* path, const char* header)
 {
-    char* text = nullptr;
-    size_t size = 0;
-    if (!settings_file_to_text(file, header, &text, &size))
-    {
-        return false;
-    }
-    bool saved = host_fs_write_file(path, text, size);
-    delete[] text;
-    return saved;
+    std::string text;
+    settings_file_to_text(file, header, &text);
+    return host_fs_write_file(path, text.data(), text.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -428,18 +297,18 @@ bool settings_file_save(const SettingsFile* file, const char* path, const char* 
 
 const char* settings_file_get(const SettingsFile* file, const char* section, const char* key)
 {
-    int32_t section_index = settings_file_find_section(file, section);
+    int32_t section_index = find_section(file, section);
     if (section_index < 0)
     {
         return nullptr;
     }
-    const SettingsFileSection* found = &file->sections[section_index];
-    int32_t entry_index = find_entry(found, key, std::strlen(key));
+    const SettingsFileSection* found = &file->sections[static_cast<size_t>(section_index)];
+    int32_t entry_index = find_entry(found, key);
     if (entry_index < 0)
     {
         return nullptr;
     }
-    return found->entries[entry_index].value;
+    return found->entries[static_cast<size_t>(entry_index)].value.c_str();
 }
 
 bool settings_file_set(SettingsFile* file, const char* section, const char* key, const char* value)
@@ -461,33 +330,24 @@ bool settings_file_set(SettingsFile* file, const char* section, const char* key,
         return false;
     }
 
-    SettingsFileSection* found = get_or_add_section(file, section, std::strlen(section));
-    put_entry(found, key, std::strlen(key), value, std::strlen(value));
+    put_entry(get_or_add_section(file, section), key, value);
     return true;
 }
 
 bool settings_file_remove(SettingsFile* file, const char* section, const char* key)
 {
-    int32_t section_index = settings_file_find_section(file, section);
+    int32_t section_index = find_section(file, section);
     if (section_index < 0)
     {
         return false;
     }
-    SettingsFileSection* found = &file->sections[section_index];
-    int32_t entry_index = find_entry(found, key, std::strlen(key));
+    SettingsFileSection* found = &file->sections[static_cast<size_t>(section_index)];
+    int32_t entry_index = find_entry(found, key);
     if (entry_index < 0)
     {
         return false;
     }
-
-    uint32_t index = static_cast<uint32_t>(entry_index);
-    delete[] found->entries[index].key;
-    delete[] found->entries[index].value;
-    for (uint32_t i = index + 1; i < found->entry_count; i++)
-    {
-        found->entries[i - 1] = found->entries[i];
-    }
-    found->entry_count--;
-    found->entries[found->entry_count] = SettingsFileEntry{};
+    // erase() only takes an iterator: begin() + index is the entry.
+    found->entries.erase(found->entries.begin() + entry_index);
     return true;
 }
