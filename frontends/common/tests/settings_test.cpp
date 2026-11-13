@@ -176,6 +176,47 @@ static void test_layers()
     check(settings_get_layer(&settings, SettingLayer::core, "video_crop_top") == nullptr, "core layer has no crop");
 }
 
+static void test_get_at_and_typed_setters()
+{
+    Settings settings = {};
+    settings_init(&settings, DESCRIPTORS, DESCRIPTOR_COUNT);
+    settings_set_context(&settings, "snes9x", "Tetris");
+
+    check(settings_set_enum(&settings, SettingLayer::global, "video_scaling", 0), "set enum by index (global)");
+    check(settings_set_enum(&settings, SettingLayer::game, "video_scaling", 2), "set enum by index (game)");
+    check(!settings_set_enum(&settings, SettingLayer::global, "video_scaling", 4), "enum index out of range refused");
+    check(!settings_set_enum(&settings, SettingLayer::global, "video_crop_top", 0), "enum setter on an int refused");
+
+    SettingLayer source = SettingLayer::defaults;
+    const char* value = settings_get_at(&settings, SettingLayer::global, "video_scaling", &source);
+    check(value != nullptr && std::strcmp(value, "full") == 0 && source == SettingLayer::global,
+          "at global: the global value, not the game override");
+    value = settings_get_at(&settings, SettingLayer::core, "video_scaling", &source);
+    check(value != nullptr && std::strcmp(value, "full") == 0 && source == SettingLayer::global,
+          "at core with no core value: global");
+    value = settings_get_at(&settings, SettingLayer::game, "video_scaling", &source);
+    check(value != nullptr && std::strcmp(value, "integer_over") == 0 && source == SettingLayer::game, "at game: game");
+    value = settings_get_at(&settings, SettingLayer::defaults, "video_scaling", &source);
+    check(value != nullptr && std::strcmp(value, "auto") == 0 && source == SettingLayer::defaults, "at defaults: default");
+
+    check(settings_set_int(&settings, SettingLayer::core, "video_crop_top", 12), "set int");
+    check(settings_get_int(&settings, "video_crop_top") == 12, "int read back");
+    check(!settings_set_int(&settings, SettingLayer::core, "video_crop_top", 65), "int out of range refused");
+    check(settings_set_int(&settings, SettingLayer::core, "video_crop_top", 0), "set int 0");
+    const char* zero = settings_get_layer(&settings, SettingLayer::core, "video_crop_top");
+    check(zero != nullptr && std::strcmp(zero, "0") == 0, "int written as \"0\"");
+
+    check(settings_set_real(&settings, SettingLayer::global, "video_max_offscreen", 2.5), "set real");
+    const char* real = settings_get_layer(&settings, SettingLayer::global, "video_max_offscreen");
+    check(real != nullptr && std::strcmp(real, "2.5") == 0, "real written as \"2.5\"");
+    check(settings_set_real(&settings, SettingLayer::global, "video_max_offscreen", 10.0), "set whole real");
+    real = settings_get_layer(&settings, SettingLayer::global, "video_max_offscreen");
+    check(real != nullptr && std::strcmp(real, "10") == 0, "whole real written as \"10\"");
+
+    check(settings_set_bool(&settings, SettingLayer::global, "pause_on_focus_loss", false), "set bool");
+    check(!settings_get_bool(&settings, "pause_on_focus_loss"), "bool read back");
+}
+
 static void test_load_save(const char* directory)
 {
     std::string path = directory;
@@ -253,6 +294,7 @@ int main(int argc, char** argv)
     test_table_checks();
     test_validation();
     test_layers();
+    test_get_at_and_typed_setters();
     test_load_save(argv[1]);
 
     if (g_failures == 0)

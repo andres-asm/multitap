@@ -113,6 +113,11 @@ double settings_get_real(const Settings* settings, const char* key);
 uint32_t settings_get_enum(const Settings* settings, const char* key);   // index into `values`
 const char* settings_get_text(const Settings* settings, const char* key); // path or text
 
+// The value as it resolves at `layer`, ignoring the layers above it: at
+// global, the global value or the default; at core, core -> global ->
+// default. What a settings screen shows while editing that layer.
+const char* settings_get_at(const Settings* settings, SettingLayer layer, const char* key, SettingLayer* source);
+
 // What one layer itself defines (valid or not), or nullptr. For the UI.
 const char* settings_get_layer(const Settings* settings, SettingLayer layer, const char* key);
 
@@ -120,6 +125,13 @@ const char* settings_get_layer(const Settings* settings, SettingLayer layer, con
 // valid, the layer is `defaults`, the setting is global-only and the layer
 // isn't global, or the layer has no core/game running.
 bool settings_set(Settings* settings, SettingLayer layer, const char* key, const char* value);
+
+// Typed versions of settings_set (the text form is written for you; reals
+// with "." whatever the locale). The same refusals apply.
+bool settings_set_bool(Settings* settings, SettingLayer layer, const char* key, bool value);
+bool settings_set_int(Settings* settings, SettingLayer layer, const char* key, int32_t value);
+bool settings_set_real(Settings* settings, SettingLayer layer, const char* key, double value);
+bool settings_set_enum(Settings* settings, SettingLayer layer, const char* key, uint32_t index);
 
 // Removes `key` from one layer, so the layer below applies again ("reset to
 // global" in a core/game layer, "reset to default" in the global one).

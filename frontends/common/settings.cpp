@@ -288,7 +288,26 @@ bool settings_set_context(Settings* settings, const char* core_name, const char*
 // Get
 // ---------------------------------------------------------------------------
 
-const char* settings_get(const Settings* settings, const char* key, SettingLayer* source)
+// Most specific first.
+static const SettingLayer LAYER_ORDER[] = {SettingLayer::game, SettingLayer::core, SettingLayer::global};
+
+static int32_t layer_rank(SettingLayer layer)
+{
+    switch (layer)
+    {
+    case SettingLayer::defaults:
+        return 0;
+    case SettingLayer::global:
+        return 1;
+    case SettingLayer::core:
+        return 2;
+    case SettingLayer::game:
+        return 3;
+    }
+    return 0;
+}
+
+const char* settings_get_at(const Settings* settings, SettingLayer layer, const char* key, SettingLayer* source)
 {
     const SettingDescriptor* descriptor = settings_find(settings, key);
     if (descriptor == nullptr)
@@ -297,12 +316,15 @@ const char* settings_get(const Settings* settings, const char* key, SettingLayer
         return nullptr;
     }
 
-    // Most specific first.
-    static const SettingLayer ORDER[] = {SettingLayer::game, SettingLayer::core, SettingLayer::global};
-    for (uint32_t i = 0; i < sizeof(ORDER) / sizeof(ORDER[0]); i++)
+    for (uint32_t i = 0; i < sizeof(LAYER_ORDER) / sizeof(LAYER_ORDER[0]); i++)
     {
-        const char* section = layer_section(settings, ORDER[i]);
-        if (section == nullptr || !layer_allowed(descriptor, ORDER[i]))
+        SettingLayer candidate = LAYER_ORDER[i];
+        if (layer_rank(candidate) > layer_rank(layer))
+        {
+            continue;
+        }
+        const char* section = layer_section(settings, candidate);
+        if (section == nullptr || !layer_allowed(descriptor, candidate))
         {
             continue;
         }
@@ -311,7 +333,7 @@ const char* settings_get(const Settings* settings, const char* key, SettingLayer
         {
             if (source != nullptr)
             {
-                *source = ORDER[i];
+                *source = candidate;
             }
             return value;
         }
@@ -321,6 +343,11 @@ const char* settings_get(const Settings* settings, const char* key, SettingLayer
         *source = SettingLayer::defaults;
     }
     return descriptor->default_value;
+}
+
+const char* settings_get(const Settings* settings, const char* key, SettingLayer* source)
+{
+    return settings_get_at(settings, SettingLayer::game, key, source);
 }
 
 // The effective value of a setting that must be of `type` (or `other_type`),
@@ -432,6 +459,43 @@ bool settings_set(Settings* settings, SettingLayer layer, const char* key, const
     }
     settings->dirty = true;
     return true;
+}
+
+bool settings_set_bool(Settings* settings, SettingLayer layer, const char* key, bool value)
+{
+    return settings_set(settings, layer, key, value ? "true" : "false");
+}
+
+bool settings_set_int(Settings* settings, SettingLayer layer, const char* key, int32_t value)
+{
+    char text[16] = {};
+    std::to_chars_result result = std::to_chars(text, text + sizeof(text) - 1, value);
+    *result.ptr = '\0';
+    return settings_set(settings, layer, key, text);
+}
+
+bool settings_set_real(Settings* settings, SettingLayer layer, const char* key, double value)
+{
+    // Shortest text that reads back as the same number: "5", "2.5".
+    char text[64] = {};
+    std::to_chars_result result = std::to_chars(text, text + sizeof(text) - 1, value);
+    if (result.ec != std::errc())
+    {
+        return false;
+    }
+    *result.ptr = '\0';
+    return settings_set(settings, layer, key, text);
+}
+
+bool settings_set_enum(Settings* settings, SettingLayer layer, const char* key, uint32_t index)
+{
+    const SettingDescriptor* descriptor = settings_find(settings, key);
+    if (descriptor == nullptr || descriptor->type != SettingType::enumeration || index >= descriptor->value_count)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Settings: %s has no value number %u", key, index);
+        return false;
+    }
+    return settings_set(settings, layer, key, descriptor->values[index].key);
 }
 
 bool settings_reset(Settings* settings, SettingLayer layer, const char* key)
