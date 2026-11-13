@@ -120,3 +120,10 @@ struct ViewportResult
 
 // False (result zeroed) if the frame or the window has no size.
 bool viewport_compute(const ViewportInput* input, ViewportResult* result);
+
+// The picture's own size at whole factor `factor` (height = factor x the
+// cropped frame height, width from the aspect), with no window involved: for
+// a window sized to the picture. The window fields are not used; `stretch`
+// has no window to follow here, so it counts as the core's aspect.
+// False if the frame has no size or factor is 0.
+bool viewport_picture_size(const ViewportInput* input, uint32_t factor, uint32_t* width, uint32_t* height);

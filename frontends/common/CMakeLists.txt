@@ -18,6 +18,7 @@ add_library(frontend_common STATIC
     app_paths.cpp
     viewport.cpp
     picture.cpp
+    window_size.cpp
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -66,5 +67,12 @@ if(MULTITAP_BUILD_TESTS)
     multitap_set_project_flags(frontend_viewport_test)
     add_test(NAME frontend_viewport COMMAND frontend_viewport_test)
     set_tests_properties(frontend_viewport PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+
+    add_executable(frontend_window_size_test tests/window_size_test.cpp)
+    target_link_libraries(frontend_window_size_test PRIVATE frontend_common)
+    multitap_set_project_flags(frontend_window_size_test)
+    add_test(NAME frontend_window_size COMMAND frontend_window_size_test)
+    set_tests_properties(frontend_window_size PROPERTIES
                          FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
 endif()

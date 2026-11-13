@@ -92,14 +92,11 @@ static uint32_t integer_factor(const ViewportInput* input, double fit, double wi
     return factor < 1.0 ? 1u : static_cast<uint32_t>(factor);
 }
 
-bool viewport_compute(const ViewportInput* input, ViewportResult* result)
+// The shown part of the frame (crop applied, in result->source_*) and its
+// displayed aspect. `window_aspect` is used for stretch (<= 0: no window,
+// stretch counts as the core's aspect).
+static double source_and_aspect(const ViewportInput* input, double window_aspect, ViewportResult* result)
 {
-    *result = ViewportResult{};
-    if (input->frame_width == 0 || input->frame_height == 0 || input->window_width == 0 || input->window_height == 0)
-    {
-        return false;
-    }
-
     // Crop first (in 64 bits: two huge crops must not wrap around).
     uint64_t crop_horizontal = static_cast<uint64_t>(input->crop.left) + input->crop.right;
     uint64_t crop_vertical = static_cast<uint64_t>(input->crop.top) + input->crop.bottom;
@@ -110,34 +107,41 @@ bool viewport_compute(const ViewportInput* input, ViewportResult* result)
     result->source_width = crop_x ? input->frame_width - static_cast<uint32_t>(crop_horizontal) : input->frame_width;
     result->source_height = crop_y ? input->frame_height - static_cast<uint32_t>(crop_vertical) : input->frame_height;
 
+    if (input->aspect == ViewportAspect::stretch && window_aspect > 0.0)
+    {
+        return window_aspect;
+    }
+    // The aspect setting describes the whole frame; the pixel aspect ratio
+    // carries it over to the cropped part.
     double frame_width = static_cast<double>(input->frame_width);
     double frame_height = static_cast<double>(input->frame_height);
-    double source_width = static_cast<double>(result->source_width);
-    double source_height = static_cast<double>(result->source_height);
+    double frame_aspect = frame_width / frame_height;
+    bool use_core = input->aspect == ViewportAspect::core || input->aspect == ViewportAspect::stretch;
+    if (use_core && input->core_aspect > 0.0)
+    {
+        frame_aspect = input->core_aspect;
+    }
+    else if (input->aspect == ViewportAspect::fixed && input->fixed_aspect > 0.0)
+    {
+        frame_aspect = input->fixed_aspect;
+    }
+    double pixel_aspect = frame_aspect * frame_height / frame_width;
+    return pixel_aspect * static_cast<double>(result->source_width) / static_cast<double>(result->source_height);
+}
+
+bool viewport_compute(const ViewportInput* input, ViewportResult* result)
+{
+    *result = ViewportResult{};
+    if (input->frame_width == 0 || input->frame_height == 0 || input->window_width == 0 || input->window_height == 0)
+    {
+        return false;
+    }
+
     double window_width = static_cast<double>(input->window_width);
     double window_height = static_cast<double>(input->window_height);
-
-    // The displayed aspect of what's shown. The aspect setting describes the
-    // whole frame; the pixel aspect ratio carries it over to the cropped part.
-    double aspect = 0.0;
-    if (input->aspect == ViewportAspect::stretch)
-    {
-        aspect = window_width / window_height;
-    }
-    else
-    {
-        double frame_aspect = frame_width / frame_height;
-        if (input->aspect == ViewportAspect::core && input->core_aspect > 0.0)
-        {
-            frame_aspect = input->core_aspect;
-        }
-        else if (input->aspect == ViewportAspect::fixed && input->fixed_aspect > 0.0)
-        {
-            frame_aspect = input->fixed_aspect;
-        }
-        double pixel_aspect = frame_aspect * frame_height / frame_width;
-        aspect = pixel_aspect * source_width / source_height;
-    }
+    double aspect = source_and_aspect(input, window_width / window_height, result);
+    double source_width = static_cast<double>(result->source_width);
+    double source_height = static_cast<double>(result->source_height);
 
     // Size at factor 1 (height = the source's lines) and the factor that fits.
     double width_at_1 = source_height * aspect;
@@ -179,5 +183,20 @@ bool viewport_compute(const ViewportInput* input, ViewportResult* result)
     double prescale_y = std::floor(static_cast<double>(result->height) / source_height + VIEWPORT_EPSILON);
     result->prescale_x = prescale_x < 1.0 ? 1u : static_cast<uint32_t>(prescale_x);
     result->prescale_y = prescale_y < 1.0 ? 1u : static_cast<uint32_t>(prescale_y);
+    return true;
+}
+
+bool viewport_picture_size(const ViewportInput* input, uint32_t factor, uint32_t* width, uint32_t* height)
+{
+    *width = 0;
+    *height = 0;
+    if (input->frame_width == 0 || input->frame_height == 0 || factor == 0)
+    {
+        return false;
+    }
+    ViewportResult source = {};
+    double aspect = source_and_aspect(input, 0.0, &source);
+    *height = factor * source.source_height;
+    *width = round_to_pixels(static_cast<double>(*height) * aspect);
     return true;
 }
