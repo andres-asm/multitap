@@ -54,22 +54,21 @@ static void check_effective(const Settings* settings, const char* key, const cha
 }
 
 static const SettingEnumValue SCALING_VALUES[] = {
-    {"full", "Full"},
-    {"integer_under", "Integer (under)"},
-    {"integer_over", "Integer (over)"},
-    {"auto", "Auto"},
+    {"full"},
+    {"integer_under"},
+    {"integer_over"},
+    {"auto"},
 };
 
 static const SettingDescriptor DESCRIPTORS[] = {
     {.key = "video_scaling", .type = SettingType::enumeration, .default_value = "auto", .overridable = true,
-     .values = SCALING_VALUES, .value_count = 4, .label = "Scaling"},
+     .values = SCALING_VALUES, .value_count = 4},
     {.key = "video_crop_top", .type = SettingType::integer, .default_value = "0", .overridable = true, .min = 0,
-     .max = 64, .label = "Crop top"},
+     .max = 64},
     {.key = "video_max_offscreen", .type = SettingType::real, .default_value = "5", .overridable = true,
-     .min_real = 0.0, .max_real = 50.0, .step_real = 0.5, .label = "Max offscreen %"},
-    {.key = "pause_on_focus_loss", .type = SettingType::boolean, .default_value = "true", .overridable = false,
-     .label = "Pause when the window loses focus"},
-    {.key = "path_saves", .type = SettingType::path, .default_value = "", .overridable = false, .label = "Saves"},
+     .min_real = 0.0, .max_real = 50.0, .step_real = 0.5},
+    {.key = "pause_on_focus_loss", .type = SettingType::boolean, .default_value = "true", .overridable = false,},
+    {.key = "path_saves", .type = SettingType::path, .default_value = "", .overridable = false},
 };
 static const uint32_t DESCRIPTOR_COUNT = sizeof(DESCRIPTORS) / sizeof(DESCRIPTORS[0]);
 

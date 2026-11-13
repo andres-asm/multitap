@@ -108,6 +108,10 @@ struct LibretroHostConfig
     // options existed. It only changes what the core THINKS we support (so its
     // v1/v0 fallbacks can be tested); every format is accepted regardless.
     uint32_t core_options_version = 2;
+
+    // What GET_LANGUAGE answers: a RETRO_LANGUAGE_* value (the frontend's
+    // language, so cores can show their own text in it).
+    uint32_t language = 0;   // RETRO_LANGUAGE_ENGLISH
 };
 
 constexpr uint32_t LIBRETRO_CORE_OPTIONS_VERSION_MAX = 2;
@@ -148,6 +152,7 @@ struct LibretroHost
     // with libretro_host_set_option().
     LibretroOptions options              = {};
     uint32_t        core_options_version = 2;   // copied from the config at load
+    uint32_t        language = 0;               // copied from the config at load (GET_LANGUAGE)
 
     // Set by the core with SET_KEYBOARD_CALLBACK; nullptr = it doesn't want key events.
     retro_keyboard_event_t keyboard_callback = nullptr;

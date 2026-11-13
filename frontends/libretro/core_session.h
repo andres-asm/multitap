@@ -43,6 +43,7 @@ struct CoreSession
     char     states_directory[LIBRETRO_PATH_MAX] = {};                    // savestates ("" = none)
     char     system_directory[LIBRETRO_PATH_MAX] = {};                    // BIOS etc. ("" = none)
     uint32_t options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;         // reported to the core
+    uint32_t language = 0;   // RETRO_LANGUAGE_* for GET_LANGUAGE (0 = English)
 
     // The core's picture, uploaded once per new frame.
     StreamingTexture texture         = {};

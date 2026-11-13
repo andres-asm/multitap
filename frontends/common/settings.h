@@ -44,10 +44,15 @@ enum class SettingLayer
     game,
 };
 
+// Labels and help are the frontend's string IDs (localization.h): this
+// module only stores them. SETTING_NO_TEXT = none (an enum value without a
+// label shows its key, e.g. "4:3").
+constexpr uint32_t SETTING_NO_TEXT = UINT32_MAX;
+
 struct SettingEnumValue
 {
-    const char* key;     // file value, stable, never translated
-    const char* label;   // English for now; a string ID once localization lands (plan step 9)
+    const char* key;                     // file value, stable, never translated
+    uint32_t    label = SETTING_NO_TEXT;  // string ID
 };
 
 struct SettingDescriptor
@@ -64,8 +69,8 @@ struct SettingDescriptor
     double step_real = 0.0;
     const SettingEnumValue* values = nullptr;   // enumeration
     uint32_t value_count = 0;
-    const char* label = nullptr;           // English for now (see SettingEnumValue::label)
-    const char* help = nullptr;
+    uint32_t label = SETTING_NO_TEXT;      // string IDs (see SettingEnumValue)
+    uint32_t help = SETTING_NO_TEXT;
 };
 
 struct Settings

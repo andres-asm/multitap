@@ -138,7 +138,7 @@ static EnvironmentResult handle_command(LibretroHost* host, uint32_t command, vo
             {
                 return null_data(note, note_size);
             }
-            *static_cast<unsigned*>(data) = RETRO_LANGUAGE_ENGLISH;
+            *static_cast<unsigned*>(data) = host->language;
             return EnvironmentResult::handled;
         }
 

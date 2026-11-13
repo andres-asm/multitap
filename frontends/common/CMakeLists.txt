@@ -30,6 +30,12 @@ target_compile_definitions(frontend_common PRIVATE $<$<CONFIG:Debug>:MULTITAP_VU
 
 multitap_set_project_flags(frontend_common)
 
+# Build-time tool: a frontend's strings.txt -> its string IDs, English table
+# and .pot (see tools/strings_generator.cpp).
+add_executable(multitap_strings_generator tools/strings_generator.cpp)
+target_link_libraries(multitap_strings_generator PRIVATE host_common)
+multitap_set_project_flags(multitap_strings_generator)
+
 if(MULTITAP_BUILD_TESTS)
     add_executable(frontend_settings_file_test tests/settings_file_test.cpp)
     target_link_libraries(frontend_settings_file_test PRIVATE frontend_common)

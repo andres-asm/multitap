@@ -510,6 +510,7 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
     // Before set_environment: cores ask GET_CORE_OPTIONS_VERSION from inside it.
     host->core_options_version = config->core_options_version <= LIBRETRO_CORE_OPTIONS_VERSION_MAX
                                      ? config->core_options_version : LIBRETRO_CORE_OPTIONS_VERSION_MAX;
+    host->language = config->language;
 
     host_log(LogLevel::info, "Loading core %s", host->core_path);
     if (!libretro_core_load(&host->core, host->core_path))
