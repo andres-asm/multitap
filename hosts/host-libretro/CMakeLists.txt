@@ -24,13 +24,13 @@ add_executable(libretro_test_frontend
 )
 target_link_libraries(libretro_test_frontend PRIVATE frontend_libretro)
 multitap_set_project_flags(libretro_test_frontend)
-multitap_copy_after_build(libretro_test_frontend "${MULTITAP_BIN_DIR}")
+multitap_copy_after_build(libretro_test_frontend "${MULTITAP_HOST_LIBRETRO_DIR}")
 
 # Development tool: load a core (+ content), log environment calls, print info, unload.
 add_executable(libretro_core_info tools/core_info.cpp)
 target_link_libraries(libretro_core_info PRIVATE host_libretro)
 multitap_set_project_flags(libretro_core_info)
-multitap_copy_after_build(libretro_core_info "${MULTITAP_BIN_DIR}")
+multitap_copy_after_build(libretro_core_info "${MULTITAP_HOST_LIBRETRO_DIR}")
 
 # ---------------------------------------------------------------------------
 # Tests: our own minimal test core + libretro_core_info. Run with: ctest --test-dir build
@@ -150,8 +150,13 @@ if(MULTITAP_BUILD_TESTS)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test-libretro/CMakeLists.txt")
         add_subdirectory(test-libretro)
 
-        # Into the shared cores folder the test frontend lists (root CMakeLists.txt).
-        multitap_copy_after_build(test_libretro "${MULTITAP_CORES_DIR}")
+        # Into the cores folder of each program (root CMakeLists.txt), so both list it.
+        if(MULTITAP_HOST_LIBRETRO_DIR)
+            multitap_copy_after_build(test_libretro "${MULTITAP_HOST_LIBRETRO_DIR}/cores" host_libretro)
+        endif()
+        if(MULTITAP_PICCOLO_DIR)
+            multitap_copy_after_build(test_libretro "${MULTITAP_PICCOLO_DIR}/cores" piccolo)
+        endif()
 
         # Headless smoke test: 120 frames of Test libretro (environment page) through the host.
         # Checks retro_run, video copy/conversion and the input path under the sanitizers.

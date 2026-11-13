@@ -131,6 +131,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     LibretroHostConfig config = {};
     config.core_options_version = session->options_version;
     config.data_directory = session->data_directory;
+    config.system_directory = session->system_directory;
     if (!libretro_host_load_core(session->host, core_path, &config))
     {
         set_message(session, "Could not load the core %s (see the log)", core_path);

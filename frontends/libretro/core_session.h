@@ -40,6 +40,7 @@ struct CoreSession
 
     // Settings for the next start.
     char     data_directory[LIBRETRO_PATH_MAX] = {};                      // SRAM, states ("" = none)
+    char     system_directory[LIBRETRO_PATH_MAX] = {};                    // BIOS etc. ("" = none)
     uint32_t options_version = LIBRETRO_CORE_OPTIONS_VERSION_MAX;         // reported to the core
 
     // The core's picture, uploaded once per new frame.

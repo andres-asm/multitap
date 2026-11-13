@@ -10,37 +10,54 @@ option(MULTITAP_WARNINGS_AS_ERRORS "Treat warnings in our own code as errors"   
 option(MULTITAP_SANITIZE           "Build our own code with ASan + UBSan"         OFF)
 option(MULTITAP_BUILD_TESTS        "Build test cores and register CTest tests"    ON)
 
-# Where builds are copied so they're easy to find and run:
-#   MULTITAP_BIN_DIR    the programs (test frontend, core info tool, piccolo)
-#   MULTITAP_CORES_DIR  the libretro test core, next to any other cores dropped
-#                       there (the test frontend lists that folder)
+# Where builds are copied so they're easy to find and run: each program's own
+# folder, the same one the program uses for its data (frontends/common/app_paths.h):
+#   MULTITAP_HOST_LIBRETRO_DIR  test frontend + core info tool; test core into its cores/
+#   MULTITAP_PICCOLO_DIR        piccolo; test core into its cores/
+# Linux: $XDG_DATA_HOME/<program> (default ~/.local/share/<program>). macOS:
+# ~/Library/Application Support/<program>. Windows: the program is portable
+# (its data goes next to the .exe), so any folder works; default
+# %USERPROFILE%/<program>.
 # Only from normal builds: sanitizer builds need the ASan runtime (an ASan core
 # can't be loaded by a normal frontend), so they keep everything in the build
 # folder. Empty = don't copy.
 if(MULTITAP_SANITIZE)
-    set(_data_dir_default "")
+    set(_programs_base "")
 elseif(WIN32)
-    set(_data_dir_default "$ENV{USERPROFILE}/.host-libretro")
+    set(_programs_base "$ENV{USERPROFILE}")
+elseif(APPLE)
+    set(_programs_base "$ENV{HOME}/Library/Application Support")
+elseif(DEFINED ENV{XDG_DATA_HOME} AND IS_ABSOLUTE "$ENV{XDG_DATA_HOME}")
+    set(_programs_base "$ENV{XDG_DATA_HOME}")
 else()
-    set(_data_dir_default "$ENV{HOME}/.host-libretro")
+    set(_programs_base "$ENV{HOME}/.local/share")
 endif()
-if(_data_dir_default)
-    set(_cores_dir_default "${_data_dir_default}/cores")
+if(_programs_base)
+    set(_host_libretro_dir_default "${_programs_base}/host-libretro")
+    set(_piccolo_dir_default "${_programs_base}/piccolo")
 else()
-    set(_cores_dir_default "")
+    set(_host_libretro_dir_default "")
+    set(_piccolo_dir_default "")
 endif()
-set(MULTITAP_BIN_DIR "${_data_dir_default}" CACHE PATH "Copy programs here after building (empty = don't)")
-set(MULTITAP_CORES_DIR "${_cores_dir_default}" CACHE PATH "Copy test cores here after building (empty = don't)")
+set(MULTITAP_HOST_LIBRETRO_DIR "${_host_libretro_dir_default}" CACHE PATH
+    "Copy the host-libretro test frontend and tools here after building (empty = don't)")
+set(MULTITAP_PICCOLO_DIR "${_piccolo_dir_default}" CACHE PATH "Copy piccolo here after building (empty = don't)")
 
 # Copies `target`'s file into `directory` after every build. Written to a
 # temporary name first, then renamed over the old one: a program or core that
 # is running keeps its old copy (overwriting a running executable fails, and
 # overwriting a loaded .so in place can crash the program using it).
+# An optional third argument names the copy step, for copying one target to
+# several folders.
 function(multitap_copy_after_build target directory)
     if(NOT directory)
         return()
     endif()
-    add_custom_target(copy_${target} ALL
+    set(step_name "copy_${target}")
+    if(ARGC GREATER 2)
+        set(step_name "copy_${target}_${ARGV2}")
+    endif()
+    add_custom_target(${step_name} ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${directory}"
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${target}> "${directory}/$<TARGET_FILE_NAME:${target}>.new"
         COMMAND ${CMAKE_COMMAND} -E rename "${directory}/$<TARGET_FILE_NAME:${target}>.new" "${directory}/$<TARGET_FILE_NAME:${target}>"

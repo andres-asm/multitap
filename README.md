@@ -71,13 +71,16 @@ Multitap, and CTest runs it headless through host-libretro: core options in all
 three formats (v2, v1 and the old `SET_VARIABLES`), size and timing changes,
 save RAM and savestates.
 
-Normal (non-sanitizer) builds copy the programs to `~/.host-libretro/` and the
-core to `~/.host-libretro/cores/`, where the test frontend lists it next to any
-other cores you drop in. Save RAM and savestates go to
-`~/.host-libretro/saves/` and `~/.host-libretro/states/`.
+Each program keeps everything in one folder of its own: on Linux
+`$XDG_DATA_HOME/<program>` (by default `~/.local/share/<program>`), on macOS
+`~/Library/Application Support/<program>`, and on Windows the folder the program
+is in. Inside it: `settings/`, `cores/`, `saves/`, `states/` and `system/`.
+Normal (non-sanitizer) builds copy the test frontend there
+(`~/.local/share/host-libretro/`) and Test libretro into its `cores/`, where the
+test frontend lists it next to any other cores you drop in.
 
 ```sh
-~/.host-libretro/libretro_test_frontend
+~/.local/share/host-libretro/libretro_test_frontend
 ```
 
 ## Why Multitap?

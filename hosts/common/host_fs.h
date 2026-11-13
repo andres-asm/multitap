@@ -22,6 +22,11 @@ bool host_fs_read_file(const char* path, uint8_t** data, size_t* size);
 // parent directories.
 bool host_fs_write_file(const char* path, const void* data, size_t size);
 
+// Copies a file, or a directory with everything inside it, to `to`.
+// Files that already exist at the destination are kept, not overwritten.
+// Creates missing parent directories.
+bool host_fs_copy(const char* from, const char* to);
+
 // "dir/name.ext" -> "name" (no directory, no last extension). Returns false
 // if it doesn't fit in `out`.
 bool host_fs_stem(const char* path, char* out, size_t out_size);

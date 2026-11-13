@@ -18,6 +18,7 @@
 
 #include "imgui.h"
 
+#include "app_paths.h"
 #include "app_shell.h"
 #include "audio_output.h"
 #include "debug_ui.h"
@@ -25,6 +26,7 @@
 #include "core_session.h"
 #include "host_fs.h"
 #include "libretro_host.h"
+#include "settings_file.h"
 #include "vk_texture.h"
 
 static const ClearColor CLEAR_COLOR = { 0.06f, 0.06f, 0.08f, 1.0f };
@@ -55,11 +57,13 @@ struct App
 
     ImageArea    image_area = {};
 
-    // Where the host keeps SRAM and savestates ("~/.host-libretro", resolved at startup).
-    char data_directory[LIBRETRO_PATH_MAX] = {};
+    // The program folder (app_paths.h: ~/.local/share/host-libretro on Linux)
+    // and its subfolders. The host keeps SRAM and savestates in it.
+    AppPaths    paths = {};
+    std::string imgui_ini;   // <settings>/imgui.ini; ImGui keeps a pointer to it
 
-    // Cores offered in the Core list: every core in <data>/cores, with what
-    // each says about itself (peeked once, cached in <data>/core_info_cache.cfg).
+    // Cores offered in the Core list: every core in <root>/cores, with what
+    // each says about itself (peeked once, cached in <root>/core_info_cache.cfg).
     CoreCatalog catalog = {};
 
 
@@ -267,77 +271,48 @@ static void draw_core_list(App* app)
 }
 
 // ---------------------------------------------------------------------------
-// Last used core and content (<data>/libretro_test_frontend.cfg)
+// Last used core and content (<settings>/last_used.cfg)
 // ---------------------------------------------------------------------------
 //
-// Two "key=value" lines, written when a core starts, read at startup unless a
+// "core" and "content", written when a core starts, read at startup unless a
 // core is given on the command line. The fields are filled in; nothing starts
 // on its own. Paths are stored as typed (e.g. with "~").
 
-static bool last_used_file(const App* app, char* out, size_t out_size)
+static std::string last_used_file(const App* app)
 {
-    int written = std::snprintf(out, out_size, "%s/libretro_test_frontend.cfg", app->data_directory);
-    return app->data_directory[0] != '\0' && written > 0 && static_cast<size_t>(written) < out_size;
+    return app->paths.settings + "/last_used.cfg";
 }
 
 static void save_last_used(const App* app)
 {
-    char path[LIBRETRO_PATH_MAX] = {};
-    char text[LIBRETRO_PATH_MAX * 2 + 32] = {};
-    if (!last_used_file(app, path, sizeof(path)))
+    if (app->paths.settings.empty())
     {
         return;
     }
-    int length = std::snprintf(text, sizeof(text), "core=%s\ncontent=%s\n", app->core_path, app->content_path);
-    if (length > 0 && static_cast<size_t>(length) < sizeof(text))
+    SettingsFile file = {};
+    if (settings_file_set(&file, "", "core", app->core_path) && settings_file_set(&file, "", "content", app->content_path))
     {
-        host_fs_write_file(path, text, static_cast<size_t>(length));
-    }
-}
-
-// Copies the rest of the line after `key` (e.g. "core=") into `out`, if the line starts with it.
-static void read_setting(const char* line, size_t line_length, const char* key, char* out, size_t out_size)
-{
-    size_t key_length = std::strlen(key);
-    if (line_length < key_length || std::strncmp(line, key, key_length) != 0)
-    {
-        return;
-    }
-    size_t value_length = line_length - key_length;
-    if (value_length < out_size)
-    {
-        std::memcpy(out, line + key_length, value_length);
-        out[value_length] = '\0';
+        settings_file_save(&file, last_used_file(app).c_str(), "host-libretro test frontend: last used core and content");
     }
 }
 
 static void load_last_used(App* app)
 {
-    char path[LIBRETRO_PATH_MAX] = {};
-    if (!last_used_file(app, path, sizeof(path)) || !host_fs_exists(path))
+    SettingsFile file = {};
+    if (app->paths.settings.empty() || !settings_file_load(&file, last_used_file(app).c_str()))
     {
         return;
     }
-    uint8_t* data = nullptr;
-    size_t size = 0;
-    if (!host_fs_read_file(path, &data, &size))
+    const char* core = settings_file_get(&file, "", "core");
+    const char* content = settings_file_get(&file, "", "content");
+    if (core != nullptr)
     {
-        return;
+        copy_path(app->core_path, sizeof(app->core_path), core);
     }
-    const char* text = static_cast<const char*>(static_cast<const void*>(data));
-    size_t start = 0;
-    while (start < size)
+    if (content != nullptr)
     {
-        size_t end = start;
-        while (end < size && text[end] != '\n')
-        {
-            end++;
-        }
-        read_setting(text + start, end - start, "core=", app->core_path, sizeof(app->core_path));
-        read_setting(text + start, end - start, "content=", app->content_path, sizeof(app->content_path));
-        start = end + 1;
+        copy_path(app->content_path, sizeof(app->content_path), content);
     }
-    delete[] data;
 }
 
 static bool core_running(const App* app)
@@ -666,7 +641,7 @@ static void draw_controls_window(App* app)
         ImGui::TextUnformatted(app->session.host->keyboard_callback != nullptr ? "(core has a keyboard callback)"
                                                                        : "(core only polls keys)");
     }
-    ImGui::Text("Saves and states: %s", app->data_directory[0] != '\0' ? app->data_directory : "(none)");
+    ImGui::Text("Saves and states: %s", app->paths.root.empty() ? "(none)" : app->paths.root.c_str());
 
     draw_savestate_section(app);
     // Inside this window (not a separate one) so everything scrolls together.
@@ -1025,22 +1000,21 @@ int main(int argc, char** argv)
         ImGuiIO& io = ImGui::GetIO();
         // Arrow keys and gamepad buttons belong to the core here, not to ImGui navigation.
         io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);
-        // Own layout file, so it doesn't fight with piccolo's imgui.ini in the same folder.
-        io.IniFilename = "libretro_test_frontend.ini";
-
-        // Decided for now: per-game host data (SRAM, savestates) under ~/.host-libretro.
-        resolve_user_path("~/.host-libretro", app->data_directory, sizeof(app->data_directory));
-        copy_path(app->session.data_directory, sizeof(app->session.data_directory), app->data_directory);
-        char cores_directory[LIBRETRO_PATH_MAX] = {};
-        char cache_path[LIBRETRO_PATH_MAX] = {};
-        int cores_written = std::snprintf(cores_directory, sizeof(cores_directory), "%s/cores", app->data_directory);
-        int cache_written = std::snprintf(cache_path, sizeof(cache_path), "%s/core_info_cache.cfg", app->data_directory);
-        if (cores_written > 0 && static_cast<size_t>(cores_written) < sizeof(cores_directory) && cache_written > 0 &&
-            static_cast<size_t>(cache_written) < sizeof(cache_path))
+        // Everything in the program folder (app_paths.h), migrated once from
+        // ~/.host-libretro. Without it nothing is saved, but cores still run.
+        if (app_paths_init(&app->paths, "host-libretro", "libretro_test_frontend.cfg"))
         {
-            SDL_CreateDirectory(cores_directory);   // so it's there to copy cores into
-            core_catalog_init(&app->catalog, cores_directory, cache_path);
+            app->imgui_ini = app->paths.settings + "/imgui.ini";
+            io.IniFilename = app->imgui_ini.c_str();
+            copy_path(app->session.data_directory, sizeof(app->session.data_directory), app->paths.root.c_str());
+            copy_path(app->session.system_directory, sizeof(app->session.system_directory), app->paths.system.c_str());
+            std::string cache_path = app->paths.root + "/core_info_cache.cfg";
+            core_catalog_init(&app->catalog, app->paths.cores.c_str(), cache_path.c_str());
             core_catalog_scan(&app->catalog, nullptr);
+        }
+        else
+        {
+            io.IniFilename = nullptr;
         }
 
         set_status(app, "Choose a core (list, command line, or drag and drop)");

@@ -162,6 +162,33 @@ bool host_fs_write_file(const char* path, const void* data, size_t size)
     return true;
 }
 
+bool host_fs_copy(const char* from, const char* to)
+{
+    std::filesystem::path source = utf8_path(from);
+    std::filesystem::path destination = utf8_path(to);
+    std::error_code error;
+
+    std::filesystem::path parent = destination.parent_path();
+    if (!parent.empty())
+    {
+        std::filesystem::create_directories(parent, error);
+        if (error)
+        {
+            host_log(LogLevel::error, "Could not create the directory for %s: %s", to, error.message().c_str());
+            return false;
+        }
+    }
+    std::filesystem::copy(source, destination,
+                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
+                          error);
+    if (error)
+    {
+        host_log(LogLevel::error, "Could not copy %s to %s: %s", from, to, error.message().c_str());
+        return false;
+    }
+    return true;
+}
+
 bool host_fs_stem(const char* path, char* out, size_t out_size)
 {
     const char* name = path;
