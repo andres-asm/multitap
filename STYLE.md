@@ -25,21 +25,42 @@ and is built without our warning flags.
 - References only where a library API forces them (e.g. `ImGuiIO& io = ImGui::GetIO()`).
 - `new[]`/`delete[]` for short-lived scratch arrays in one function, freed in the same function.
   Prefer fixed-size arrays with a named `MAX_` constant when there is a sane limit.
+- `std::vector`, `std::string` and `std::string_view` outside hot paths (see
+  below), in `.cpp` files and in headers inside one component (frontend_common,
+  piccolo, multitap). Walk them with an index: `for (size_t i = 0; i < v.size(); i++)`.
+  Pass them like any struct: pointers for out-parameters, `const` pointers for input.
+- `<algorithm>` (`std::sort`, `std::find`, ...) outside hot paths, with a named
+  `static` function as comparator.
+- *Using* the library's member functions and operators (`v.size()`,
+  `v.push_back(x)`, `a == b` on strings). What's not allowed is writing our own.
+- Structs whose members are STL types get a destructor and copying from the
+  compiler: that's fine ("rule of zero"). We never write them ourselves.
 
 ## Not allowed
 
 - `auto` (anywhere, including loops).
 - Lambdas, templates we write ourselves, template metaprogramming.
-- Classes with behavior: no member functions, constructors/destructors, inheritance, `virtual`.
-- Operator overloading.
+- Classes with behavior: we don't write member functions, constructors/destructors,
+  inheritance, `virtual`.
+- Writing operator overloads.
 - Exceptions (`-fno-exceptions`) and RTTI (`-fno-rtti`).
 - Macros for code generation or control flow. `#define` only for include guards
   (we use `#pragma once`) and build-time feature switches (`MULTITAP_VULKAN_VALIDATION`).
 - C-style casts. Implicit narrowing or sign conversion (`-Wconversion -Wsign-conversion`).
 - Hidden global state. If a library forces it (libretro callbacks carry no
   userdata), keep it in one place, document why, and assert it is set.
-- STL containers and `<algorithm>` in hot paths or public interfaces.
-  (Allowed later only where a spec says so.)
+- STL in the host/frontend protocol (plain C, crosses processes) and in the
+  public headers of `host_common` and the hosts (they may end up in another
+  process or a separately built library). Inside their `.cpp` files it's fine.
+- Other STL containers (`std::unordered_map`, `std::map`, ...), smart pointers
+  and iterators: only where a spec says so. A vector with a linear or sorted
+  search covers almost everything.
+
+## Hot paths
+
+The per-frame loop, the audio callback and input reading never allocate
+memory: no `new`, no growing a vector or string. A vector reserved up front
+(`reserve` when the object is created) may be used there, but not grown.
 
 ## Functions and errors
 
