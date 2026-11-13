@@ -24,7 +24,9 @@
 struct VulkanContext;
 struct VulkanSwapchain;
 
-// How many frames the CPU may record ahead of the GPU.
+// The most frames the CPU may record ahead of the GPU (arrays are this big).
+// How many are actually used is renderer->frames_in_flight (1 or 2): 1 is
+// lower latency (the CPU waits for the GPU every frame), 2 is smoother.
 constexpr uint32_t FRAMES_IN_FLIGHT = 2;
 
 enum class RenderFrameResult
@@ -45,9 +47,16 @@ struct FrameResources
 struct Renderer
 {
     FrameResources frames[FRAMES_IN_FLIGHT] = {};
-    uint32_t frame_index = 0;          // which FrameResources we are using, 0..FRAMES_IN_FLIGHT-1
+    uint32_t frames_in_flight = FRAMES_IN_FLIGHT;   // 1 or 2 (renderer_set_frames_in_flight)
+    uint32_t frame_index = 0;          // which FrameResources we are using, 0..frames_in_flight-1
     uint32_t image_index = 0;          // which swapchain image we acquired this frame
     bool     swapchain_suboptimal = false;
+
+    // Low latency: after presenting, wait until the frame is on screen
+    // (present wait, when the context has it) or else until the GPU has
+    // finished it. The next frame then starts as late as possible.
+    bool     wait_for_present = false;
+    uint64_t present_id = 0;           // id of the last present (present wait)
 };
 
 struct ClearColor
@@ -72,6 +81,9 @@ RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* co
 
 VkCommandBuffer renderer_command_buffer(const Renderer* renderer);
 
-// Which FrameResources slot (0..FRAMES_IN_FLIGHT-1) is recording. Per-frame
+// 1 or 2 (clamped). Changing it waits for the GPU; call between frames.
+void renderer_set_frames_in_flight(Renderer* renderer, const VulkanContext* context, uint32_t count);
+
+// Which FrameResources slot (0..frames_in_flight-1) is recording. Per-frame
 // resources elsewhere (e.g. staging buffers) are indexed with this.
 uint32_t renderer_frame_index(const Renderer* renderer);

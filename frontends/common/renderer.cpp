@@ -243,6 +243,50 @@ void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapcha
     vkCmdBeginRendering(frame->command_buffer, &rendering_info);
 }
 
+// Low latency: wait until the frame is on screen (present wait) or, without
+// present wait, until the GPU has finished it (the frame's fence; like a
+// "hard GPU sync"). Never longer than 100 ms, so a hidden or stalled window
+// can't hang the loop. A failed wait only costs latency, not correctness.
+constexpr uint64_t PRESENT_WAIT_TIMEOUT_NS = 100000000u;
+
+static void wait_after_present(const VulkanContext* context, const VulkanSwapchain* swapchain,
+                               const FrameResources* frame, uint64_t present_id)
+{
+    if (context->present_wait_version == 1 && context->wait_for_present != nullptr)
+    {
+        context->wait_for_present(context->device, swapchain->swapchain, present_id, PRESENT_WAIT_TIMEOUT_NS);
+        return;
+    }
+#if defined(VK_KHR_present_wait2)
+    if (context->present_wait_version == 2 && context->wait_for_present2 != nullptr)
+    {
+        VkPresentWait2InfoKHR wait_info = {
+            .sType     = VK_STRUCTURE_TYPE_PRESENT_WAIT_2_INFO_KHR,
+            .presentId = present_id,
+            .timeout   = PRESENT_WAIT_TIMEOUT_NS,
+        };
+        context->wait_for_present2(context->device, swapchain->swapchain, &wait_info);
+        return;
+    }
+#endif
+    vkWaitForFences(context->device, 1, &frame->in_flight_fence, VK_TRUE, PRESENT_WAIT_TIMEOUT_NS);
+}
+
+void renderer_set_frames_in_flight(Renderer* renderer, const VulkanContext* context, uint32_t count)
+{
+    count = count < 1 ? 1 : (count > FRAMES_IN_FLIGHT ? FRAMES_IN_FLIGHT : count);
+    if (count == renderer->frames_in_flight)
+    {
+        return;
+    }
+    // Every slot idle, then restart at slot 0 (its fence is signaled: the
+    // next begin_frame won't wait on a fence that will never come).
+    vkDeviceWaitIdle(context->device);
+    renderer->frames_in_flight = count;
+    renderer->frame_index = 0;
+    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Frames in flight: %u", count);
+}
+
 RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* context,
                                      const VulkanSwapchain* swapchain)
 {
@@ -286,7 +330,7 @@ RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* co
         return RenderFrameResult::error;
     }
 
-    // Present.
+    // Present, with an id when present wait is there (so we can wait for it).
     VkPresentInfoKHR present_info = {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -295,10 +339,37 @@ RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* co
         .pSwapchains        = &swapchain->swapchain,
         .pImageIndices      = &renderer->image_index,
     };
+    renderer->present_id++;
+    uint64_t present_id = renderer->present_id;
+    VkPresentIdKHR present_id_info = {
+        .sType          = VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+        .swapchainCount = 1,
+        .pPresentIds    = &present_id,
+    };
+    if (context->present_wait_version == 1)
+    {
+        present_info.pNext = &present_id_info;
+    }
+#if defined(VK_KHR_present_wait2)
+    VkPresentId2KHR present_id2_info = {
+        .sType          = VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR,
+        .swapchainCount = 1,
+        .pPresentIds    = &present_id,
+    };
+    if (context->present_wait_version == 2)
+    {
+        present_info.pNext = &present_id2_info;
+    }
+#endif
     VkResult present_result = vkQueuePresentKHR(context->queue, &present_info);
 
+    if (renderer->wait_for_present && (present_result == VK_SUCCESS || present_result == VK_SUBOPTIMAL_KHR))
+    {
+        wait_after_present(context, swapchain, frame, present_id);
+    }
+
     // Advance to the next FrameResources whatever happened, the submit already went through.
-    renderer->frame_index = (renderer->frame_index + 1) % FRAMES_IN_FLIGHT;
+    renderer->frame_index = (renderer->frame_index + 1) % renderer->frames_in_flight;
 
     if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR ||
         renderer->swapchain_suboptimal)

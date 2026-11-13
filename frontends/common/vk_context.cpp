@@ -199,7 +199,7 @@ bool vulkan_context_create_instance(VulkanContext* context,
     const char* extensions[MAX_ENABLED_INSTANCE_EXTENSIONS] = {};
     uint32_t extension_count = 0;
 
-    if (required_extension_count > MAX_ENABLED_INSTANCE_EXTENSIONS - 2)
+    if (required_extension_count > MAX_ENABLED_INSTANCE_EXTENSIONS - 3)
     {
         SDL_LogError(SDL_LOG_CATEGORY_GPU, "Too many required instance extensions (%u)", required_extension_count);
         return false;
@@ -218,6 +218,15 @@ bool vulkan_context_create_instance(VulkanContext* context,
         extensions[extension_count] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
         extension_count++;
         instance_flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+
+    // Surface capabilities 2: to ask a surface whether present wait 2 works on it.
+    context->surface_capabilities2 = false;
+    if (instance_extension_available(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
+    {
+        extensions[extension_count] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+        extension_count++;
+        context->surface_capabilities2 = true;
     }
 
     // Validation: Debug builds only, and only if the layer is installed.
@@ -445,6 +454,83 @@ static bool create_imgui_descriptor_pool(VulkanContext* context)
                         "vkCreateDescriptorPool (imgui)");
 }
 
+// Which present wait the device and surface can do (see VulkanContext).
+// Version 2 needs the device features AND the surface's yes (a driver may
+// have the extension but not support it on every window system).
+static uint32_t find_present_wait(const VulkanContext* context, VkSurfaceKHR surface)
+{
+    VkPhysicalDevice physical_device = context->physical_device;
+#if defined(VK_KHR_present_wait2)
+    if (context->surface_capabilities2 &&
+        device_extension_available(physical_device, VK_KHR_PRESENT_ID_2_EXTENSION_NAME) &&
+        device_extension_available(physical_device, VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME))
+    {
+        VkPhysicalDevicePresentWait2FeaturesKHR wait2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_2_FEATURES_KHR,
+        };
+        VkPhysicalDevicePresentId2FeaturesKHR id2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR,
+            .pNext = &wait2,
+        };
+        VkPhysicalDeviceFeatures2 features = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &id2,
+        };
+        vkGetPhysicalDeviceFeatures2(physical_device, &features);
+
+        VkSurfaceCapabilitiesPresentWait2KHR surface_wait2 = {
+            .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR,
+        };
+        VkSurfaceCapabilitiesPresentId2KHR surface_id2 = {
+            .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR,
+            .pNext = &surface_wait2,
+        };
+        VkSurfaceCapabilities2KHR capabilities = {
+            .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+            .pNext = &surface_id2,
+        };
+        VkPhysicalDeviceSurfaceInfo2KHR surface_info = {
+            .sType   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
+            .surface = surface,
+        };
+        PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR get_capabilities2 =
+            reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(
+                vkGetInstanceProcAddr(context->instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
+        bool queried = get_capabilities2 != nullptr &&
+                       get_capabilities2(physical_device, &surface_info, &capabilities) == VK_SUCCESS;
+        if (wait2.presentWait2 && id2.presentId2 && queried && surface_wait2.presentWait2Supported &&
+            surface_id2.presentId2Supported)
+        {
+            return 2;
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Present wait 2: device %s, this surface %s",
+                    wait2.presentWait2 && id2.presentId2 ? "yes" : "no",
+                    queried && surface_wait2.presentWait2Supported && surface_id2.presentId2Supported ? "yes" : "no");
+    }
+#endif
+    if (device_extension_available(physical_device, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+        device_extension_available(physical_device, VK_KHR_PRESENT_WAIT_EXTENSION_NAME))
+    {
+        VkPhysicalDevicePresentWaitFeaturesKHR wait = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR,
+        };
+        VkPhysicalDevicePresentIdFeaturesKHR id = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+            .pNext = &wait,
+        };
+        VkPhysicalDeviceFeatures2 features = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &id,
+        };
+        vkGetPhysicalDeviceFeatures2(physical_device, &features);
+        if (wait.presentWait && id.presentId)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
 {
     if (!select_physical_device(context, surface))
@@ -479,6 +565,45 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
         .dynamicRendering = VK_TRUE,
     };
 
+    // Present wait (optional): its extensions and features go in the chain.
+    context->present_wait_version = find_present_wait(context, surface);
+    VkPhysicalDevicePresentWaitFeaturesKHR present_wait = {
+        .sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR,
+        .presentWait = VK_TRUE,
+    };
+    VkPhysicalDevicePresentIdFeaturesKHR present_id = {
+        .sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+        .pNext     = &present_wait,
+        .presentId = VK_TRUE,
+    };
+    if (context->present_wait_version == 1)
+    {
+        extensions[extension_count] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
+        extension_count++;
+        extensions[extension_count] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+        extension_count++;
+        features13.pNext = &present_id;
+    }
+#if defined(VK_KHR_present_wait2)
+    VkPhysicalDevicePresentWait2FeaturesKHR present_wait2 = {
+        .sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_2_FEATURES_KHR,
+        .presentWait2 = VK_TRUE,
+    };
+    VkPhysicalDevicePresentId2FeaturesKHR present_id2 = {
+        .sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR,
+        .pNext      = &present_wait2,
+        .presentId2 = VK_TRUE,
+    };
+    if (context->present_wait_version == 2)
+    {
+        extensions[extension_count] = VK_KHR_PRESENT_ID_2_EXTENSION_NAME;
+        extension_count++;
+        extensions[extension_count] = VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME;
+        extension_count++;
+        features13.pNext = &present_id2;
+    }
+#endif
+
     VkDeviceCreateInfo device_info = {
         .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext                   = &features13,
@@ -494,6 +619,24 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
     }
 
     vkGetDeviceQueue(context->device, context->queue_family, 0, &context->queue);
+
+    // Extension functions come from the device (the loader doesn't export them).
+    if (context->present_wait_version == 1)
+    {
+        context->wait_for_present =
+            reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(context->device, "vkWaitForPresentKHR"));
+    }
+#if defined(VK_KHR_present_wait2)
+    if (context->present_wait_version == 2)
+    {
+        context->wait_for_present2 =
+            reinterpret_cast<PFN_vkWaitForPresent2KHR>(vkGetDeviceProcAddr(context->device, "vkWaitForPresent2KHR"));
+    }
+#endif
+    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Present wait: %s",
+                context->present_wait_version == 2   ? "VK_KHR_present_wait2"
+                : context->present_wait_version == 1 ? "VK_KHR_present_wait"
+                                                     : "not available (waiting for the GPU instead)");
 
     if (!create_imgui_descriptor_pool(context))
     {

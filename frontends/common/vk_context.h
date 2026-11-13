@@ -30,6 +30,17 @@ struct VulkanContext
     uint32_t queue_family = UINT32_MAX;     // one family that does graphics + present
     VkQueue  queue        = VK_NULL_HANDLE;
 
+    // Present wait (waiting until a presented frame is on screen), when the
+    // GPU and this window's surface support it: 2 = VK_KHR_present_wait2,
+    // 1 = VK_KHR_present_wait, 0 = not available. The matching function is
+    // loaded; swapchains need extra flags for version 2.
+    bool                     surface_capabilities2 = false;   // instance has VK_KHR_get_surface_capabilities2
+    uint32_t                 present_wait_version = 0;
+    PFN_vkWaitForPresentKHR  wait_for_present = nullptr;
+#if defined(VK_KHR_present_wait2)
+    PFN_vkWaitForPresent2KHR wait_for_present2 = nullptr;
+#endif
+
     // Descriptor pool reserved for Dear ImGui (font atlas + any debug textures).
     VkDescriptorPool imgui_descriptor_pool = VK_NULL_HANDLE;
 };

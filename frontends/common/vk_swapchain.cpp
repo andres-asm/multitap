@@ -196,6 +196,13 @@ static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanC
         .clipped          = VK_TRUE,
         .oldSwapchain     = old_swapchain,
     };
+#if defined(VK_KHR_present_wait2)
+    // Present wait 2 is opted into per swapchain.
+    if (context->present_wait_version == 2)
+    {
+        create_info.flags |= VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR | VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR;
+    }
+#endif
 
     if (!vk_succeeded(vkCreateSwapchainKHR(context->device, &create_info, nullptr, &swapchain->swapchain),
                       "vkCreateSwapchainKHR"))
