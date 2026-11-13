@@ -16,6 +16,7 @@ add_library(frontend_common STATIC
     settings_file.cpp
     settings.cpp
     app_paths.cpp
+    viewport.cpp
 )
 
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -57,5 +58,12 @@ if(MULTITAP_BUILD_TESTS)
     add_test(NAME frontend_app_paths COMMAND frontend_app_paths_test "${APP_PATHS_SCRATCH}")
     set_tests_properties(frontend_app_paths PROPERTIES
                          FIXTURES_REQUIRED app_paths_scratch
+                         FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+
+    add_executable(frontend_viewport_test tests/viewport_test.cpp)
+    target_link_libraries(frontend_viewport_test PRIVATE frontend_common)
+    multitap_set_project_flags(frontend_viewport_test)
+    add_test(NAME frontend_viewport COMMAND frontend_viewport_test)
+    set_tests_properties(frontend_viewport PROPERTIES
                          FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
 endif()
