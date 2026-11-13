@@ -218,6 +218,11 @@ void core_session_update(CoreSession* session, AppShell* shell)
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
                                         bool keyboard_for_joypad)
 {
+    // The due check is a loop tick, not "the core will run": it comes BEFORE
+    // the paused/minimized checks on purpose, so the Exact timer keeps
+    // advancing while paused. With vsync off, frame_timing_wait() is the only
+    // thing throttling the loop; if the timer stood still, a paused session
+    // would spin at 100% CPU. Don't move it below those checks.
     if (!frame_timing_frame_due(&session->timing))
     {
         return CoreSessionFrame::skipped;
