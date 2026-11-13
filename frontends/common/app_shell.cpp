@@ -292,3 +292,8 @@ double app_shell_display_refresh_hz(const AppShell* shell)
     }
     return static_cast<double>(mode->refresh_rate);
 }
+
+bool app_shell_vsync_forced(const AppShell* shell)
+{
+    return !shell->swapchain.vsync && shell->swapchain.present_mode == VK_PRESENT_MODE_FIFO_KHR;
+}

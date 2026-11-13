@@ -72,6 +72,11 @@ bool app_shell_acquire(AppShell* shell);
 // swapchain if it changes. Returns false only on a fatal error.
 bool app_shell_set_vsync(AppShell* shell, bool vsync);
 
+// True when vsync was asked to be off but the swapchain is still on FIFO
+// (the driver offers neither MAILBOX nor IMMEDIATE): every present waits for
+// vsync anyway.
+bool app_shell_vsync_forced(const AppShell* shell);
+
 // The refresh rate of the display the window is on, in Hz (e.g. 59.91), or 0
 // if SDL doesn't know it.
 double app_shell_display_refresh_hz(const AppShell* shell);

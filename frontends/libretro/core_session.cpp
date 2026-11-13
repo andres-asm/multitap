@@ -200,8 +200,10 @@ void core_session_update(CoreSession* session, AppShell* shell)
     keyboard_input_update(&session->keyboard, shell->window);
 
     bool running = core_session_running(session);
+    // vsync_forced comes from the swapchain as it is now (set_vsync below may
+    // change it; the next loop sees the result).
     frame_timing_update(&session->timing, running, running ? session->host->av_info.timing.fps : 0.0,
-                        app_shell_display_refresh_hz(shell));
+                        app_shell_display_refresh_hz(shell), app_shell_vsync_forced(shell));
     bool vsync = session->timing.effective == TimingMode::vsync;
     if (!app_shell_set_vsync(shell, vsync))
     {

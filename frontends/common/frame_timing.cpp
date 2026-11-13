@@ -14,7 +14,7 @@ static uint64_t frame_period_ns(double fps)
     return static_cast<uint64_t>(static_cast<double>(NANOSECONDS_PER_SECOND) / clamped);
 }
 
-void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps, double display_hz)
+void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps, double display_hz, bool vsync_forced)
 {
     timing->core_fps = core_running ? core_fps : 0.0;
     timing->display_hz = display_hz;
@@ -43,6 +43,20 @@ void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps
         timing->next_frame_ns = SDL_GetTicksNS();   // start pacing from now
     }
     timing->effective = effective;
+
+    timing->fifo_forced = effective == TimingMode::exact && vsync_forced;
+    if (!core_running)
+    {
+        timing->fifo_warned = false;   // warn again for the next core
+    }
+    else if (timing->fifo_forced && !timing->fifo_warned)
+    {
+        timing->fifo_warned = true;
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Exact timing not available on this driver (FIFO only): presents wait for vsync, so a core "
+                    "faster than the display (%.3f fps on %.2f Hz) runs at the display's speed",
+                    core_fps, display_hz);
+    }
 }
 
 bool frame_timing_frame_due(FrameTiming* timing)

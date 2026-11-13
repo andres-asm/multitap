@@ -83,6 +83,16 @@ static VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical_device, Vk
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
+    // Debug switch: MULTITAP_FORCE_FIFO=1 pretends the driver only has FIFO
+    // (as on MoltenVK and some Android drivers), to test that fallback on
+    // drivers that do have MAILBOX.
+    const char* force_fifo = SDL_getenv("MULTITAP_FORCE_FIFO");
+    if (force_fifo != nullptr && SDL_strcmp(force_fifo, "1") == 0)
+    {
+        SDL_LogWarn(SDL_LOG_CATEGORY_GPU, "Vsync off requested, but MULTITAP_FORCE_FIFO=1: staying on FIFO (debug)");
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
     constexpr uint32_t MAX_MODES = 16;
     VkPresentModeKHR modes[MAX_MODES] = {};
     uint32_t count = MAX_MODES;

@@ -36,13 +36,21 @@ struct FrameTiming
     double core_fps   = 0.0;
     double display_hz = 0.0;
 
+    // Exact picked, but the driver couldn't turn vsync off (FIFO only): the
+    // timer still paces the core, which keeps cores slower than the display
+    // right, but presents wait for vsync, so cores faster than the display run
+    // at the display's speed. A driver limit; UIs should say so.
+    bool fifo_forced = false;
+    bool fifo_warned = false;   // logged once per core start
+
     uint64_t next_frame_ns = 0;   // exact mode: when the next core frame is due (SDL_GetTicksNS)
 };
 
 // Once per loop: works out the effective mode from the user's choice, the
 // core's fps and the display's refresh rate. With no core running it's vsync
-// (nothing to pace).
-void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps, double display_hz);
+// (nothing to pace). vsync_forced: app_shell_vsync_forced() (sets fifo_forced
+// while in Exact).
+void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps, double display_hz, bool vsync_forced);
 
 // True if a core frame should run now. Vsync: always (vsync paces the loop).
 // Exact: when the timer says so (and advances it).

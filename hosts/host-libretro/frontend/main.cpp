@@ -530,6 +530,11 @@ static void draw_timing_section(App* app)
     ImGui::Text("In use: %s%s  (core %.3f fps, display %.2f Hz, %s)", frame_timing_mode_name(app->session.timing.effective),
                 app->session.timing.fell_back ? " (Vsync not possible)" : "", app->session.timing.core_fps, app->session.timing.display_hz,
                 vk_present_mode_to_string(app->shell.swapchain.present_mode));
+    if (app->session.timing.fifo_forced)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                           "Exact not available on this driver: presents wait for vsync (FIFO only)");
+    }
     if (app->session.audio.stream != nullptr)
     {
         ImGui::Text("Audio speed: x%.5f%s", app->session.audio.current_ratio,
