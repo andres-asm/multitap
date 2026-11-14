@@ -17,6 +17,8 @@
 #include <cstdint>
 
 #include "audio_output.h"
+#include "core_options_cache.h"
+#include "core_options_store.h"
 #include "fixed_input.h"
 #include "frame_timing.h"
 #include "keyboard_input.h"
@@ -50,6 +52,13 @@ struct CoreSession
     uint64_t         texture_id      = 0;   // ImGui texture id, 0 = none
     uint64_t         uploaded_serial = 0;   // host->video.serial in the texture
 
+    // Core options the frontend keeps (not owned; nullptr = not kept): the
+    // stored values go to the core when it declares its options, and what
+    // the core declares is cached. The frontend loads and saves both files.
+    CoreOptionsStore* option_store   = nullptr;
+    CoreOptionsCache* option_cache   = nullptr;
+    uint32_t          options_serial = 0;   // host->options.serial last cached
+
     AudioOutput       audio        = {};   // open while a core runs
     AudioOutputConfig audio_config = {};   // the frontend's audio choices: applied at start and by core_session_update
     FrameTiming   timing      = {};   // Vsync / Exact
@@ -68,6 +77,16 @@ struct CoreSession
 bool core_session_create(CoreSession* session);
 // Stops the core and frees everything (safe after a failed create).
 void core_session_destroy(CoreSession* session, AppShell* shell);
+
+// Changes a core option at `layer` (kept in option_store; a value equal to
+// what applies below isn't written) and gives the running core the new
+// effective value. False if no store, no such option, or the layer doesn't
+// exist (no content: no folder / game layer).
+bool core_session_set_option(CoreSession* session, CoreOptionLayer layer, const char* key, const char* value);
+
+// Removes `key` from `layer` and gives the running core what applies now
+// (the layer below, or the core's default).
+bool core_session_reset_option(CoreSession* session, CoreOptionLayer layer, const char* key);
 
 // Loads the core, then the content (nullptr or "" = none). Paths are used as
 // given (resolve "~" etc. before). On failure the core is unloaded again and

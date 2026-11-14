@@ -2,12 +2,14 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <new>
 
 #include <SDL3/SDL.h>
 
 #include "app_shell.h"
 #include "debug_ui.h"
+#include "host_fs.h"
 
 #if defined(__GNUC__)
 static void set_message(CoreSession* session, const char* format, ...) __attribute__((format(printf, 2, 3)));
@@ -130,6 +132,77 @@ void core_session_stop(CoreSession* session, AppShell* shell)
     session->step_once = false;
 }
 
+// The content folder's name ("Super Nintendo" for ".../Super Nintendo/smw.sfc"),
+// the core options' folder layer.
+static void folder_name(const char* content_path, char* out, size_t out_size)
+{
+    out[0] = '\0';
+    if (content_path == nullptr)
+    {
+        return;
+    }
+    const char* end = std::strrchr(content_path, '/');
+    if (end == nullptr || end == content_path)
+    {
+        return;
+    }
+    const char* start = end - 1;
+    while (start > content_path && *(start - 1) != '/')
+    {
+        start--;
+    }
+    size_t length = static_cast<size_t>(end - start);
+    if (length >= out_size)
+    {
+        length = out_size - 1;
+    }
+    std::memcpy(out, start, length);
+    out[length] = '\0';
+}
+
+// The running core declared (or re-declared) its options: cache them.
+static void cache_options(CoreSession* session)
+{
+    if (session->option_cache == nullptr || session->host->options.serial == session->options_serial)
+    {
+        return;
+    }
+    session->options_serial = session->host->options.serial;
+    char core[256] = {};
+    if (libretro_core_short_name(session->host->core_path, core, sizeof(core)))
+    {
+        core_options_cache_update(session->option_cache, core, &session->host->options);
+    }
+}
+
+bool core_session_set_option(CoreSession* session, CoreOptionLayer layer, const char* key, const char* value)
+{
+    const LibretroOption* option = libretro_options_find(&session->host->options, key);
+    if (session->option_store == nullptr || option == nullptr)
+    {
+        return false;
+    }
+    if (!core_options_store_set(session->option_store, layer, key, value, option->values[option->default_index]))
+    {
+        return false;
+    }
+    const char* effective = core_options_store_get(session->option_store, key, nullptr);
+    return libretro_host_set_option(session->host, key, effective != nullptr ? effective : value);
+}
+
+bool core_session_reset_option(CoreSession* session, CoreOptionLayer layer, const char* key)
+{
+    const LibretroOption* option = libretro_options_find(&session->host->options, key);
+    if (session->option_store == nullptr || option == nullptr)
+    {
+        return false;
+    }
+    core_options_store_reset(session->option_store, layer, key);
+    const char* effective = core_options_store_get(session->option_store, key, nullptr);
+    return libretro_host_set_option(session->host, key,
+                                    effective != nullptr ? effective : option->values[option->default_index]);
+}
+
 bool core_session_start(CoreSession* session, AppShell* shell, const char* core_path, const char* content_path)
 {
     core_session_stop(session, shell);
@@ -139,17 +212,44 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
         return false;
     }
 
+    // The stored option values for this core, folder and game: the host
+    // applies them as the core declares its options.
+    std::vector<LibretroOptionValue> saved;
+    if (session->option_store != nullptr)
+    {
+        char core[256] = {};
+        char folder[LIBRETRO_PATH_MAX] = {};
+        char game[LIBRETRO_PATH_MAX] = {};
+        libretro_core_short_name(core_path, core, sizeof(core));
+        if (content_path != nullptr && content_path[0] != '\0')
+        {
+            folder_name(content_path, folder, sizeof(folder));
+            host_fs_stem(content_path, game, sizeof(game));
+        }
+        core_options_store_set_context(session->option_store, core, folder, game);
+        core_options_store_effective(session->option_store, &saved);
+    }
+
     LibretroHostConfig config = {};
     config.core_options_version = session->options_version;
     config.language = session->language;
     config.saves_directory = session->saves_directory;
     config.states_directory = session->states_directory;
     config.system_directory = session->system_directory;
+    config.saved_options = saved.data();
+    config.saved_option_count = static_cast<uint32_t>(saved.size());
     if (!libretro_host_load_core(session->host, core_path, &config))
     {
         set_message(session, "Could not load the core %s (see the log)", core_path);
         return false;
     }
+    if (!saved.empty())
+    {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Core options: %u stored value(s) for this core / folder / game",
+                    static_cast<unsigned>(saved.size()));
+    }
+    session->options_serial = 0;
+    cache_options(session);   // declared in retro_set_environment
 
     const char* content = content_path != nullptr && content_path[0] != '\0' ? content_path : nullptr;
     if (!libretro_host_load_game(session->host, content))
@@ -310,6 +410,8 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
             audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
         }
     }
+
+    cache_options(session);   // a core may declare its options again at runtime
 
     // A core may grow its image at runtime (SET_SYSTEM_AV_INFO).
     const LibretroVideoFrame* video = &session->host->video;
