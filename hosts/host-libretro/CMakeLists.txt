@@ -174,9 +174,20 @@ if(MULTITAP_BUILD_TESTS)
                      COMMAND libretro_core_info --options-version ${_version} --frames 10
                              --set libretro_test_width=720 $<TARGET_FILE:test_libretro>)
             set_tests_properties(host_libretro_test_libretro_options_v${_version} PROPERTIES
-                PASS_REGULAR_EXPRESSION "Options: 4 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
+                PASS_REGULAR_EXPRESSION "Options: 5 declared with API v${_version}.*Option libretro_test_width = 640 \\(640\\|720\\).*SET_GEOMETRY +\\( *37\\) handled +720x480.*Ran 10 frames: 10 video frames \\(720x480\\)"
                 FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
         endforeach()
+
+        # Sample rate option at runtime: SET_SYSTEM_AV_INFO with the new rate, and
+        # 32000 / 60 = 533.3 frames per run must add up to exactly one second of
+        # audio in 60 frames (the core carries the fraction; one frame of slack
+        # for rounding).
+        add_test(NAME host_libretro_test_libretro_sample_rate
+                 COMMAND libretro_core_info --frames 60 --set libretro_test_sample_rate=32000
+                         $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_test_libretro_sample_rate PROPERTIES
+            PASS_REGULAR_EXPRESSION "48000 Hz -> 640x480 @ 60 fps, 32000 Hz, SET_SYSTEM_AV_INFO accepted.*Ran 60 frames: 60 video frames \\(640x480\\), 0 duplicates, 0 video errors, 3(1999|2000) audio frames"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
 
         # Save RAM: the host writes it on unload and loads it back on the next run.
         # Test libretro exposes a 60-byte block; untouched, the core reports it as "empty".
@@ -245,7 +256,7 @@ if(MULTITAP_BUILD_TESTS)
         add_test(NAME host_libretro_peek_test_libretro
                  COMMAND libretro_core_info --peek $<TARGET_FILE:test_libretro>)
         set_tests_properties(host_libretro_peek_test_libretro PROPERTIES
-            PASS_REGULAR_EXPRESSION "name \"Test libretro\".*no game yes.*4 core options \\(API v2\\)"
+            PASS_REGULAR_EXPRESSION "name \"Test libretro\".*no game yes.*5 core options \\(API v2\\)"
             FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|\\] init")
 
         # A value that isn't one of the option's values must be refused.
