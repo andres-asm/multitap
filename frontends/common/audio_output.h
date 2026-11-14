@@ -42,14 +42,23 @@
 // queue the same way but don't count it as an underrun: a core's first frames
 // are slow (pipelines, textures), so a gap there says nothing about pacing.
 //
+// The frontend's choices (AudioOutputConfig: device, volume, latency, DRC,
+// resampler quality) go in at create and again whenever they change
+// (audio_output_configure: cheap when nothing changed, so it can run every
+// loop). A device that comes or goes is followed with
+// audio_output_devices_changed().
+//
 // Usage:
-//   audio_output_create(&out, sample_rate)    when a core starts
-//   audio_output_set_speed(&out, ratio, drc)  when the timing mode or fps changes
-//   audio_output_push(&out, samples, frames)  after every retro_run
-//   audio_output_destroy(&out)                when it stops (safe if create failed)
+//   audio_output_create(&out, sample_rate, &config)  when a core starts
+//   audio_output_configure(&out, &config)            when the settings change (or every loop)
+//   audio_output_set_speed(&out, ratio, drc)         when the timing mode or fps changes
+//   audio_output_push(&out, samples, frames)         after every retro_run
+//   audio_output_devices_changed(&out)               on SDL_EVENT_AUDIO_DEVICE_ADDED / _REMOVED
+//   audio_output_destroy(&out)                       when it stops (safe if create failed)
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "rate_control.h"
@@ -61,10 +70,34 @@ constexpr uint32_t AUDIO_OUTPUT_MAX_QUEUED_MS    = 150;
 constexpr uint32_t AUDIO_OUTPUT_START_SILENCE_MS = 50;
 constexpr uint32_t AUDIO_OUTPUT_WARMUP_PUSHES    = 30;   // ~0.5 s at 60 fps
 
+// libsamplerate's sinc converters. Measured on the RK3588 (resampler_measure,
+// times real time for stereo): fastest ~95x but dulls the top of the band
+// (-20 dB at the edge); medium ~50x, clean; best ~11x, the cleanest.
+enum class AudioQuality
+{
+    fastest,
+    medium,
+    best,
+};
+
+// What the frontend chooses (its settings), applied by create / configure.
+struct AudioOutputConfig
+{
+    std::string  device;                       // playback device name, "" = the system default (followed when it changes)
+    uint32_t     volume_percent = 100;         // 0..100
+    bool         muted          = false;
+    bool         automatic_latency = true;     // automatic target, starting at latency_ms
+    uint32_t     latency_ms     = RATE_CONTROL_AUTO_START_MS;   // the fixed target, or where automatic starts
+    bool         rate_control   = true;        // DRC (frontends pass it on to audio_output_set_speed)
+    double       max_deviation  = RATE_CONTROL_DEFAULT_MAX_DEVIATION;   // DRC's limit, 0.005 = 0.5%
+    AudioQuality quality        = AudioQuality::medium;
+};
 
 struct AudioOutput
 {
+    AudioOutputConfig config;                     // what is applied now
     SDL_AudioStream* stream          = nullptr;
+    uint32_t         device_id       = 0;         // what was opened (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK = follow the default)
     SRC_STATE_tag*   resampler       = nullptr;   // libsamplerate
     bool             subsystem_ready = false;     // we called SDL_InitSubSystem(SDL_INIT_AUDIO)
     double           core_rate       = 0.0;       // what the core gives us (Hz, may be fractional)
@@ -93,9 +126,23 @@ struct AudioOutput
 
 // sample_rate is the core's (it may be fractional, e.g. 32040.5 Hz).
 // Returns false (and logs why) if no audio device could be opened; the frontend
-// can keep running without sound.
-bool audio_output_create(AudioOutput* output, double sample_rate);
+// can keep running without sound. A device in `config` that isn't connected
+// falls back to the system default (logged).
+bool audio_output_create(AudioOutput* output, double sample_rate, const AudioOutputConfig* config);
 void audio_output_destroy(AudioOutput* output);
+
+// Applies what changed in `config`: volume and mute at once; a new device
+// reopens the stream (a short gap); a new quality rebuilds the resampler; a
+// new latency restarts the target from it. Nothing when unchanged.
+void audio_output_configure(AudioOutput* output, const AudioOutputConfig* config);
+
+// A playback device was connected or disconnected: moves to the chosen
+// device when it appears, to the system default when it goes away.
+void audio_output_devices_changed(AudioOutput* output);
+
+// The names of the playback devices connected now (needs SDL's audio
+// subsystem initialized; empty otherwise). For a device list in the UI.
+void audio_output_list_devices(std::vector<std::string>* names);
 
 // Changes the input sample rate (a core may call SET_SYSTEM_AV_INFO). Cheap; does nothing if unchanged.
 void audio_output_set_sample_rate(AudioOutput* output, double sample_rate);

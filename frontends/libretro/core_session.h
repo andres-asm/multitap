@@ -50,7 +50,8 @@ struct CoreSession
     uint64_t         texture_id      = 0;   // ImGui texture id, 0 = none
     uint64_t         uploaded_serial = 0;   // host->video.serial in the texture
 
-    AudioOutput   audio       = {};   // open while a core runs
+    AudioOutput       audio        = {};   // open while a core runs
+    AudioOutputConfig audio_config = {};   // the frontend's audio choices: applied at start and by core_session_update
     FrameTiming   timing      = {};   // Vsync / Exact
     FixedInput    fixed_input = {};
     KeyboardInput keyboard    = {};   // libretro keyboard + game focus

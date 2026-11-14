@@ -66,9 +66,159 @@ static double resample_ratio(const AudioOutput* output)
     return ratio < MIN_RESAMPLE_RATIO ? MIN_RESAMPLE_RATIO : (ratio > MAX_RESAMPLE_RATIO ? MAX_RESAMPLE_RATIO : ratio);
 }
 
-bool audio_output_create(AudioOutput* output, double sample_rate)
+static int converter_type(AudioQuality quality)
+{
+    switch (quality)
+    {
+    case AudioQuality::fastest:
+        return SRC_SINC_FASTEST;
+    case AudioQuality::medium:
+        return SRC_SINC_MEDIUM_QUALITY;
+    case AudioQuality::best:
+        return SRC_SINC_BEST_QUALITY;
+    }
+    return SRC_SINC_MEDIUM_QUALITY;
+}
+
+static const char* quality_name(AudioQuality quality)
+{
+    switch (quality)
+    {
+    case AudioQuality::fastest:
+        return "fastest";
+    case AudioQuality::medium:
+        return "medium";
+    case AudioQuality::best:
+        return "best";
+    }
+    return "medium";
+}
+
+// Volume as the stream's gain. Squared: our ears hear loudness roughly by
+// the log of the amplitude, so a straight line would put almost all the
+// change in the bottom quarter of the range.
+static void apply_volume(AudioOutput* output)
+{
+    double volume = static_cast<double>(output->config.volume_percent) / 100.0;
+    volume = volume > 1.0 ? 1.0 : volume;
+    float gain = output->config.muted ? 0.0f : static_cast<float>(volume * volume);
+    SDL_SetAudioStreamGain(output->stream, gain);
+}
+
+static void apply_latency(AudioOutput* output)
+{
+    output->rate.max_deviation = output->config.max_deviation;
+    audio_output_set_latency(output, output->config.latency_ms, output->config.automatic_latency);
+}
+
+// The ID to open for a device name: that device if it's connected, else the
+// system default (which SDL follows when it changes).
+static SDL_AudioDeviceID find_device(const std::string& name)
+{
+    if (name.empty())
+    {
+        return SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    }
+    int count = 0;
+    SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
+    SDL_AudioDeviceID found = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    for (int i = 0; devices != nullptr && i < count; i++)
+    {
+        const char* device_name = SDL_GetAudioDeviceName(devices[i]);
+        if (device_name != nullptr && name == device_name)
+        {
+            found = devices[i];
+            break;
+        }
+    }
+    SDL_free(devices);
+    return found;
+}
+
+static void close_stream(AudioOutput* output)
+{
+    if (output->stream != nullptr)
+    {
+        // Also closes the device SDL_OpenAudioDeviceStream opened for it.
+        SDL_DestroyAudioStream(output->stream);
+        output->stream = nullptr;
+    }
+    output->device_id = 0;
+}
+
+// Opens the stream on the configured device (or the default) at the
+// device's own rate, and starts it. Playback starts over: a cushion of
+// silence, then the warm-up.
+static bool open_stream(AudioOutput* output)
+{
+    SDL_AudioDeviceID device = find_device(output->config.device);
+    if (device == SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK && !output->config.device.empty())
+    {
+        SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "Audio: \"%s\" is not connected; using the system default",
+                    output->config.device.c_str());
+    }
+
+    // We resample to the device's own rate, so SDL doesn't resample again.
+    SDL_AudioSpec device_spec = {};
+    int device_buffer_frames = 0;
+    if (!SDL_GetAudioDeviceFormat(device, &device_spec, &device_buffer_frames) || device_spec.freq <= 0)
+    {
+        device_spec.freq = 48000;   // a guess SDL will convert from if the device differs
+    }
+    SDL_AudioSpec spec = {
+        .format   = SDL_AUDIO_F32,
+        .channels = CHANNELS,
+        .freq     = device_spec.freq,
+    };
+    output->stream = SDL_OpenAudioDeviceStream(device, &spec, nullptr, nullptr);
+    if (output->stream == nullptr)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not open the playback device: %s", SDL_GetError());
+        return false;
+    }
+    output->device_id = device;
+    output->device_rate = device_spec.freq;
+
+    // Device streams start paused.
+    if (!SDL_ResumeAudioStreamDevice(output->stream))
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not start the playback device: %s", SDL_GetError());
+        close_stream(output);
+        return false;
+    }
+
+    SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(output->stream), &device_spec, &device_buffer_frames);
+    output->device_buffer_ms = frames_to_ms(device_buffer_frames, output->device_rate);
+    apply_volume(output);
+    apply_latency(output);
+    src_reset(output->resampler);
+    output->started = false;
+    output->pushes = 0;
+    output->last_push_ns = 0;
+    const char* name = device == SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK ? "system default" : output->config.device.c_str();
+    SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO,
+                "Audio: %s (%s), core %.1f Hz -> device %d Hz (libsamplerate, sinc %s), %d ch, %d-frame device buffer",
+                SDL_GetCurrentAudioDriver(), name, output->core_rate, output->device_rate,
+                quality_name(output->config.quality), device_spec.channels, device_buffer_frames);
+    return true;
+}
+
+static bool create_resampler(AudioOutput* output)
+{
+    int error = 0;
+    output->resampler = src_new(converter_type(output->config.quality), CHANNELS, &error);
+    if (output->resampler == nullptr)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not create the resampler: %s", src_strerror(error));
+        return false;
+    }
+    return true;
+}
+
+bool audio_output_create(AudioOutput* output, double sample_rate, const AudioOutputConfig* config)
 {
     *output = AudioOutput{};
+    output->config = *config;
     if (!sample_rate_usable(sample_rate))
     {
         SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: the core's sample rate (%.1f Hz) is not usable; no sound", sample_rate);
@@ -83,67 +233,24 @@ bool audio_output_create(AudioOutput* output, double sample_rate)
         return false;
     }
     output->subsystem_ready = true;
-
-    // We resample to the device's own rate, so SDL doesn't resample again.
-    SDL_AudioSpec device_spec = {};
-    int device_buffer_frames = 0;
-    if (!SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &device_spec, &device_buffer_frames) ||
-        device_spec.freq <= 0)
-    {
-        device_spec.freq = 48000;   // a guess SDL will convert from if the device differs
-    }
-    SDL_AudioSpec spec = {
-        .format   = SDL_AUDIO_F32,
-        .channels = CHANNELS,
-        .freq     = device_spec.freq,
-    };
-    output->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
-    if (output->stream == nullptr)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not open the playback device: %s", SDL_GetError());
-        audio_output_destroy(output);
-        return false;
-    }
-    output->device_rate = device_spec.freq;
     output->core_rate = sample_rate;
     output->sample_rate = static_cast<int32_t>(sample_rate + 0.5);
-
-    int error = 0;
-    output->resampler = src_new(SRC_SINC_MEDIUM_QUALITY, CHANNELS, &error);
-    if (output->resampler == nullptr)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not create the resampler: %s", src_strerror(error));
-        audio_output_destroy(output);
-        return false;
-    }
     output->input.resize(INITIAL_SCRATCH_FRAMES * CHANNELS);
     output->output.resize(INITIAL_SCRATCH_FRAMES * CHANNELS * 2);
 
-    // Device streams start paused.
-    if (!SDL_ResumeAudioStreamDevice(output->stream))
+    // The resampler first: a stream that fails to open can be retried later
+    // (audio_output_devices_changed) as long as the rest is set up.
+    if (!create_resampler(output))
     {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio: could not start the playback device: %s", SDL_GetError());
         audio_output_destroy(output);
         return false;
     }
-
-    SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(output->stream), &device_spec, &device_buffer_frames);
-    output->device_buffer_ms = frames_to_ms(device_buffer_frames, output->device_rate);
-    audio_output_set_latency(output, RATE_CONTROL_AUTO_START_MS, true);
-    SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO,
-                "Audio: %s, core %.1f Hz -> device %d Hz (libsamplerate, sinc medium), %d ch, %d-frame device buffer",
-                SDL_GetCurrentAudioDriver(), sample_rate, output->device_rate, device_spec.channels,
-                device_buffer_frames);
-    return true;
+    return open_stream(output);
 }
 
 void audio_output_destroy(AudioOutput* output)
 {
-    if (output->stream != nullptr)
-    {
-        // Also closes the device SDL_OpenAudioDeviceStream opened for it.
-        SDL_DestroyAudioStream(output->stream);
-    }
+    close_stream(output);
     if (output->resampler != nullptr)
     {
         src_delete(output->resampler);
@@ -155,9 +262,99 @@ void audio_output_destroy(AudioOutput* output)
     *output = AudioOutput{};
 }
 
+static bool same_config(const AudioOutputConfig* a, const AudioOutputConfig* b)
+{
+    return a->volume_percent == b->volume_percent && a->muted == b->muted &&
+           a->automatic_latency == b->automatic_latency && a->latency_ms == b->latency_ms &&
+           a->rate_control == b->rate_control && a->max_deviation == b->max_deviation && a->quality == b->quality &&
+           a->device == b->device;
+}
+
+void audio_output_configure(AudioOutput* output, const AudioOutputConfig* config)
+{
+    if (output->resampler == nullptr || same_config(&output->config, config))
+    {
+        return;   // not set up (no sound), or nothing changed
+    }
+    AudioOutputConfig old = output->config;
+    output->config = *config;
+
+    if (old.quality != config->quality)
+    {
+        src_delete(output->resampler);
+        output->resampler = nullptr;
+        if (!create_resampler(output))
+        {
+            close_stream(output);   // no resampler, no sound
+            return;
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_AUDIO, "Audio: resampler quality %s", quality_name(config->quality));
+    }
+    // Another device: reopen unless it resolves to the one already open (e.g.
+    // a device that isn't connected, while on the default). A stream that
+    // failed to open is retried here too, once per change.
+    if (old.device != config->device &&
+        (output->stream == nullptr || find_device(config->device) != output->device_id))
+    {
+        close_stream(output);
+        open_stream(output);   // applies volume and latency too
+        return;
+    }
+    if (output->stream == nullptr)
+    {
+        return;
+    }
+    if (old.volume_percent != config->volume_percent || old.muted != config->muted)
+    {
+        apply_volume(output);
+    }
+    if (old.latency_ms != config->latency_ms || old.automatic_latency != config->automatic_latency ||
+        old.max_deviation != config->max_deviation)
+    {
+        apply_latency(output);
+    }
+}
+
+void audio_output_devices_changed(AudioOutput* output)
+{
+    if (output->resampler == nullptr)
+    {
+        return;   // not set up (no sound)
+    }
+    // Our device went away (find_device gives the default now), or the chosen
+    // one came back, or the stream never opened: reopen. When following the
+    // system default, SDL moves the stream by itself.
+    if (output->stream != nullptr && find_device(output->config.device) == output->device_id)
+    {
+        return;
+    }
+    close_stream(output);
+    open_stream(output);
+}
+
+void audio_output_list_devices(std::vector<std::string>* names)
+{
+    names->clear();
+    if (!SDL_WasInit(SDL_INIT_AUDIO))
+    {
+        return;
+    }
+    int count = 0;
+    SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
+    for (int i = 0; devices != nullptr && i < count; i++)
+    {
+        const char* name = SDL_GetAudioDeviceName(devices[i]);
+        if (name != nullptr)
+        {
+            names->push_back(name);
+        }
+    }
+    SDL_free(devices);
+}
+
 void audio_output_set_sample_rate(AudioOutput* output, double sample_rate)
 {
-    if (output->stream == nullptr || !sample_rate_usable(sample_rate) || sample_rate == output->core_rate)
+    if (output->resampler == nullptr || !sample_rate_usable(sample_rate) || sample_rate == output->core_rate)
     {
         return;
     }
@@ -171,7 +368,7 @@ void audio_output_set_sample_rate(AudioOutput* output, double sample_rate)
 
 void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_control)
 {
-    if (output->stream == nullptr)
+    if (output->resampler == nullptr)
     {
         return;
     }

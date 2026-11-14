@@ -164,7 +164,7 @@ bool core_session_start(CoreSession* session, AppShell* shell, const char* core_
     }
 
     // No sound is not fatal: the core still runs (the reason is logged).
-    audio_output_create(&session->audio, session->host->av_info.timing.sample_rate);
+    audio_output_create(&session->audio, session->host->av_info.timing.sample_rate, &session->audio_config);
 
     const char* name = session->host->system_info.library_name;
     set_message(session, "Running %s", name != nullptr ? name : "core");
@@ -185,6 +185,13 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
     fixed_input_handle_event(&session->fixed_input, event, keyboard_for_joypad && !session->keyboard.game_focus,
                              session->gamepad);
 
+    if (event->type == SDL_EVENT_AUDIO_DEVICE_ADDED || event->type == SDL_EVENT_AUDIO_DEVICE_REMOVED)
+    {
+        if (!event->adevice.recording)
+        {
+            audio_output_devices_changed(&session->audio);
+        }
+    }
     if (event->type == SDL_EVENT_GAMEPAD_ADDED && session->gamepad == nullptr)
     {
         session->gamepad = SDL_OpenGamepad(event->gdevice.which);
@@ -215,7 +222,10 @@ void core_session_update(CoreSession* session, AppShell* shell)
     // DRC in both modes. Vsync: on top of display Hz / core fps. Exact: on top
     // of ratio 1, because the frame timer (SDL_GetTicksNS) and the audio device
     // clock differ by tens of ppm, enough to drain or fill the queue in minutes.
-    audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing), true);
+    // DRC can be turned off in the frontend's settings (then only the base speed applies).
+    audio_output_configure(&session->audio, &session->audio_config);
+    audio_output_set_speed(&session->audio, frame_timing_audio_ratio(&session->timing),
+                           session->audio_config.rate_control);
 }
 
 CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, const LibretroInputState* pointer,
