@@ -6,7 +6,7 @@
 // Usage:
 //   libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]
 //                      [--options-version N] [--data-dir DIR] [--load-state N] [--save-state N]
-//                      [--set KEY=VALUE]... <core> [content]
+//                      [--set KEY=VALUE]... [--saved KEY=VALUE]... <core> [content]
 //
 // Without content, cores that support it are started with no game.
 
@@ -23,7 +23,7 @@ static void print_usage()
     std::fprintf(stderr,
                  "usage: libretro_core_info [--verbose] [--frames N] [--system DIR] [--save DIR]\n"
                  "                          [--options-version N] [--data-dir DIR] [--load-state N] [--save-state N]\n"
-                 "                          [--set KEY=VALUE]... <core> [content]\n"
+                 "                          [--set KEY=VALUE]... [--saved KEY=VALUE]... <core> [content]\n"
                  "  --verbose            also log repeated environment calls and core debug output\n"
                  "  --frames N           run N frames after loading (headless, no input)\n"
                  "  --system DIR         directory returned for GET_SYSTEM_DIRECTORY (default: none)\n"
@@ -33,7 +33,8 @@ static void print_usage()
                  "  --peek               only ask the core about itself (no retro_init), print it, exit\n"
                  "  --load-state N       load savestate slot N before running frames\n"
                  "  --save-state N       save savestate slot N after running frames\n"
-                 "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n");
+                 "  --set KEY=VALUE      change a core option after loading the game (repeatable)\n"
+                 "  --saved KEY=VALUE    a saved core option value, applied when the core declares it (repeatable)\n");
 }
 
 // Prints every option the core declared, one line each, in a fixed format that
@@ -74,6 +75,9 @@ int main(int argc, char** argv)
     long load_state_slot = -1;   // -1 = don't
     long save_state_slot = -1;
     int option_set_count = 0;
+    char saved_keys[MAX_OPTION_SETS][256] = {};
+    LibretroOptionValue saved[MAX_OPTION_SETS] = {};
+    int saved_count = 0;
     const char* core_path = nullptr;
     const char* content_path = nullptr;
     unsigned long frames_to_run = 0;
@@ -137,6 +141,21 @@ int main(int argc, char** argv)
             option_sets[option_set_count] = argv[i];
             option_set_count++;
         }
+        else if (std::strcmp(argument, "--saved") == 0 && i + 1 < argc && saved_count < MAX_OPTION_SETS)
+        {
+            i++;
+            const char* equals = std::strchr(argv[i], '=');
+            size_t key_length = equals != nullptr ? static_cast<size_t>(equals - argv[i]) : 0;
+            if (equals == nullptr || key_length == 0 || key_length >= sizeof(saved_keys[0]))
+            {
+                print_usage();
+                return 2;
+            }
+            std::memcpy(saved_keys[saved_count], argv[i], key_length);
+            saved[saved_count].key = saved_keys[saved_count];
+            saved[saved_count].value = equals + 1;
+            saved_count++;
+        }
         else if (argument[0] == '-')
         {
             print_usage();
@@ -189,6 +208,8 @@ int main(int argc, char** argv)
     LibretroHost* host = new LibretroHost{};
     int exit_code = 0;
 
+    config.saved_options = saved;
+    config.saved_option_count = static_cast<uint32_t>(saved_count);
     if (!libretro_host_load_core(host, core_path, &config))
     {
         exit_code = 1;

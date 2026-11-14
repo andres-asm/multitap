@@ -70,9 +70,12 @@ static void free_lists(LibretroOption* list, uint32_t count, LibretroOptionCateg
     delete[] categories;
 }
 
+static void free_saved(LibretroOptions* options);
+
 void libretro_options_free(LibretroOptions* options)
 {
     free_lists(options->options, options->count, options->categories, options->category_count);
+    free_saved(options);
     *options = LibretroOptions{};
 }
 
@@ -162,12 +165,14 @@ static bool build_option(LibretroOption* option, const OptionSource* source)
 }
 
 // Keeps the user's choice across a re-registration when the key and value still exist.
-static void carry_over_value(LibretroOption* option, const LibretroOptions* previous)
+// An option declared again keeps its value and visibility. Returns false for
+// a new option.
+static bool carry_over_value(LibretroOption* option, const LibretroOptions* previous)
 {
     const LibretroOption* old_option = libretro_options_find(previous, option->key);
     if (old_option == nullptr)
     {
-        return;
+        return false;
     }
     const char* old_value = old_option->values[old_option->current_index];
     for (uint32_t i = 0; i < option->value_count; i++)
@@ -179,6 +184,74 @@ static void carry_over_value(LibretroOption* option, const LibretroOptions* prev
         }
     }
     option->visible = old_option->visible;
+    return true;
+}
+
+// A new option takes the frontend's saved value, when there is a valid one.
+static void apply_saved_value(LibretroOption* option, const LibretroOptions* options)
+{
+    for (uint32_t i = 0; i < options->saved_count; i++)
+    {
+        if (!same_text(options->saved_keys[i], option->key))
+        {
+            continue;
+        }
+        for (uint32_t v = 0; v < option->value_count; v++)
+        {
+            if (same_text(option->values[v], options->saved_values[i]))
+            {
+                option->current_index = v;
+                return;
+            }
+        }
+        host_log(LogLevel::warning, "Saved value \"%s\" for core option %s is not one of its values; using the default",
+                 options->saved_values[i], option->key);
+        return;
+    }
+}
+
+static void free_saved(LibretroOptions* options)
+{
+    for (uint32_t i = 0; i < options->saved_count; i++)
+    {
+        delete[] options->saved_keys[i];
+        delete[] options->saved_values[i];
+    }
+    delete[] options->saved_keys;
+    delete[] options->saved_values;
+    options->saved_keys = nullptr;
+    options->saved_values = nullptr;
+    options->saved_count = 0;
+}
+
+bool libretro_options_set_saved(LibretroOptions* options, const LibretroOptionValue* values, uint32_t count)
+{
+    free_saved(options);
+    if (count == 0)
+    {
+        return true;
+    }
+    options->saved_keys = new (std::nothrow) char*[count]();
+    options->saved_values = new (std::nothrow) char*[count]();
+    if (options->saved_keys == nullptr || options->saved_values == nullptr)
+    {
+        delete[] options->saved_keys;
+        delete[] options->saved_values;
+        options->saved_keys = nullptr;
+        options->saved_values = nullptr;
+        return false;
+    }
+    options->saved_count = count;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        if (!copy_string(&options->saved_keys[i], values[i].key != nullptr ? values[i].key : "") ||
+            !copy_string(&options->saved_values[i], values[i].value != nullptr ? values[i].value : ""))
+        {
+            free_saved(options);
+            return false;
+        }
+    }
+    return true;
 }
 
 // Builds a complete new list from `sources`, then swaps it in. On failure the old list stays.
@@ -225,7 +298,10 @@ static bool install(LibretroOptions* options, const OptionSource* sources, uint3
             free_option(&list[count]);
             continue;
         }
-        carry_over_value(&list[count], options);
+        if (!carry_over_value(&list[count], options))
+        {
+            apply_saved_value(&list[count], options);
+        }
         count++;
     }
 
@@ -250,6 +326,7 @@ static bool install(LibretroOptions* options, const OptionSource* sources, uint3
     options->categories = category_list;
     options->category_count = category_count;
     options->api_used = api;
+    options->serial++;
     return true;
 }
 

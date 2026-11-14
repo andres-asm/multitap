@@ -178,6 +178,17 @@ if(MULTITAP_BUILD_TESTS)
                 FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED")
         endforeach()
 
+        # Saved core option values: applied when the core declares the option,
+        # so the core reads them from its first GET_VARIABLE (720 wide from the
+        # first frame, no SET_GEOMETRY). An invalid saved value is skipped
+        # with a warning and the default applies.
+        add_test(NAME host_libretro_test_libretro_saved_options
+                 COMMAND libretro_core_info --frames 5 --saved libretro_test_width=720
+                         --saved libretro_test_height=999 $<TARGET_FILE:test_libretro>)
+        set_tests_properties(host_libretro_test_libretro_saved_options PROPERTIES
+            PASS_REGULAR_EXPRESSION "Saved value \"999\" for core option libretro_test_height is not one of its values.*Option libretro_test_width = 720 .*Option libretro_test_height = 480 .*Ran 5 frames: 5 video frames \\(720x480\\)"
+            FAIL_REGULAR_EXPRESSION "${TEST_CORE_ERRORS}|REJECTED|SET_GEOMETRY")
+
         # Sample rate option at runtime: SET_SYSTEM_AV_INFO with the new rate, and
         # 32000 / 60 = 533.3 frames per run must add up to exactly one second of
         # audio in 60 frames (the core carries the fraction; one frame of slack

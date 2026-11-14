@@ -112,6 +112,12 @@ struct LibretroHostConfig
     // What GET_LANGUAGE answers: a RETRO_LANGUAGE_* value (the frontend's
     // language, so cores can show their own text in it).
     uint32_t language = 0;   // RETRO_LANGUAGE_ENGLISH
+
+    // Core option values the frontend kept for this core and game (its
+    // options file): each applied when the core declares that option, before
+    // it reads it (libretro_options_set_saved). Copied at load.
+    const LibretroOptionValue* saved_options      = nullptr;
+    uint32_t                   saved_option_count = 0;
 };
 
 constexpr uint32_t LIBRETRO_CORE_OPTIONS_VERSION_MAX = 2;

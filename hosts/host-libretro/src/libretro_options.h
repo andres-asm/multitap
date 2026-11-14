@@ -44,6 +44,14 @@ struct LibretroOption
     bool     visible       = true;      // SET_CORE_OPTIONS_DISPLAY
 };
 
+// A value the frontend kept for an option (key and value as GET_VARIABLE
+// would return them).
+struct LibretroOptionValue
+{
+    const char* key   = nullptr;
+    const char* value = nullptr;
+};
+
 struct LibretroOptions
 {
     LibretroOption*         options        = nullptr;
@@ -53,6 +61,12 @@ struct LibretroOptions
 
     uint32_t api_used = 0;        // 0, 1 or 2: the format of the last successful registration
     bool     updated  = false;    // a value changed since the core last asked (GET_VARIABLE_UPDATE)
+    uint32_t serial   = 0;        // +1 on every successful registration (frontends notice re-declarations)
+
+    // Saved values (libretro_options_set_saved), our own copies.
+    char**   saved_keys   = nullptr;
+    char**   saved_values = nullptr;
+    uint32_t saved_count  = 0;
 };
 
 // Replace the whole option list. Options that existed before under the same
@@ -61,6 +75,14 @@ struct LibretroOptions
 bool libretro_options_register_v0(LibretroOptions* options, const retro_variable* variables);
 bool libretro_options_register_v1(LibretroOptions* options, const retro_core_option_definition* definitions);
 bool libretro_options_register_v2(LibretroOptions* options, const retro_core_options_v2* definitions);
+
+// The values the frontend saved for this core (its options file), copied.
+// Each is applied when its option is declared for the first time (before the
+// core reads it); an option the core declares again keeps its current value.
+// A saved value that isn't one of the option's values is skipped (logged):
+// the default applies. Call before the core declares its options (the host
+// does it at load, from LibretroHostConfig). False only if out of memory.
+bool libretro_options_set_saved(LibretroOptions* options, const LibretroOptionValue* values, uint32_t count);
 
 // nullptr if the key is unknown.
 const LibretroOption* libretro_options_find(const LibretroOptions* options, const char* key);

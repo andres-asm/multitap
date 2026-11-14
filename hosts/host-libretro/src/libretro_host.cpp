@@ -511,6 +511,12 @@ bool libretro_host_load_core(LibretroHost* host, const char* core_path, const Li
     host->core_options_version = config->core_options_version <= LIBRETRO_CORE_OPTIONS_VERSION_MAX
                                      ? config->core_options_version : LIBRETRO_CORE_OPTIONS_VERSION_MAX;
     host->language = config->language;
+    // Also before set_environment: that's where cores declare their options.
+    if (!libretro_options_set_saved(&host->options, config->saved_options, config->saved_option_count))
+    {
+        host_log(LogLevel::error, "Out of memory keeping %u saved core options", config->saved_option_count);
+        return false;
+    }
 
     host_log(LogLevel::info, "Loading core %s", host->core_path);
     if (!libretro_core_load(&host->core, host->core_path))
