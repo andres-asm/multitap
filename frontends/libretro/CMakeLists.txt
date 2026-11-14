@@ -10,6 +10,7 @@ add_library(frontend_libretro STATIC
     keyboard_input.cpp
     fixed_input.cpp
     core_options_store.cpp
+    core_options_cache.cpp
 )
 
 target_include_directories(frontend_libretro PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -23,4 +24,10 @@ if(MULTITAP_BUILD_TESTS)
     multitap_set_project_flags(frontend_core_options_store_test)
     add_test(NAME frontend_core_options_store COMMAND frontend_core_options_store_test)
     set_tests_properties(frontend_core_options_store PROPERTIES PASS_REGULAR_EXPRESSION "core options store: all checks passed")
+
+    add_executable(frontend_core_options_cache_test tests/core_options_cache_test.cpp)
+    target_link_libraries(frontend_core_options_cache_test PRIVATE frontend_libretro)
+    multitap_set_project_flags(frontend_core_options_cache_test)
+    add_test(NAME frontend_core_options_cache COMMAND frontend_core_options_cache_test)
+    set_tests_properties(frontend_core_options_cache PROPERTIES PASS_REGULAR_EXPRESSION "core options cache: all checks passed")
 endif()
