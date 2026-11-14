@@ -112,6 +112,17 @@ bool core_session_running(const CoreSession* session)
 
 void core_session_stop(CoreSession* session, AppShell* shell)
 {
+    if (core_session_running(session))
+    {
+        // How the session's pacing went: missed refreshes, catch-up frames,
+        // audio underruns (what a log is read for after a stuttery run).
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Session: %llu missed refreshes, %llu frames caught up, %llu audio underruns",
+                    static_cast<unsigned long long>(session->timing.missed_total),
+                    static_cast<unsigned long long>(session->timing.caught_up_total),
+                    static_cast<unsigned long long>(session->audio.underruns));
+    }
+    session->timing.missed_total = 0;
+    session->timing.caught_up_total = 0;
     destroy_texture(session, shell);
     audio_output_destroy(&session->audio);
     libretro_host_unload_core(session->host);   // writes save RAM first
@@ -219,6 +230,10 @@ void core_session_update(CoreSession* session, AppShell* shell)
     // change it; the next loop sees the result).
     frame_timing_update(&session->timing, running, running ? session->host->av_info.timing.fps : 0.0,
                         app_shell_display_refresh_hz(shell), app_shell_vsync_forced(shell));
+    // Missed refreshes (and the catch-up frames for them) only count while
+    // core frames run: a paused or minimized game has nothing to make up.
+    bool minimized = (SDL_GetWindowFlags(shell->window) & SDL_WINDOW_MINIMIZED) != 0;
+    frame_timing_measure(&session->timing, running && !session->paused && !minimized);
     bool vsync = session->timing.effective == TimingMode::vsync;
     if (!app_shell_set_vsync(shell, vsync))
     {
@@ -271,21 +286,29 @@ CoreSessionFrame core_session_run_frame(CoreSession* session, AppShell* shell, c
     }
 
     libretro_host_set_input(session->host, &input);
-    libretro_host_run_frame(session->host);
 
-    if (session->host->shutdown_requested)
+    // The frame, plus the ones a missed refresh lost (Vsync catch-up,
+    // frame_timing.h). Each one's audio is queued; only the last picture is
+    // uploaded and shown.
+    uint32_t frames = 1 + (session->paused ? 0 : session->timing.catch_up_frames);
+    for (uint32_t i = 0; i < frames; i++)
     {
-        core_session_stop(session, shell);
-        set_message(session, "The core asked to shut down (RETRO_ENVIRONMENT_SHUTDOWN)");
-        return CoreSessionFrame::shut_down;
-    }
+        libretro_host_run_frame(session->host);
 
-    // A core may change its sample rate (SET_SYSTEM_AV_INFO): follow it first.
-    // Single-stepping stays silent: one frame of audio after a gap is just a blip.
-    audio_output_set_sample_rate(&session->audio, session->host->av_info.timing.sample_rate);
-    if (!session->paused)
-    {
-        audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
+        if (session->host->shutdown_requested)
+        {
+            core_session_stop(session, shell);
+            set_message(session, "The core asked to shut down (RETRO_ENVIRONMENT_SHUTDOWN)");
+            return CoreSessionFrame::shut_down;
+        }
+
+        // A core may change its sample rate (SET_SYSTEM_AV_INFO): follow it first.
+        // Single-stepping stays silent: one frame of audio after a gap is just a blip.
+        audio_output_set_sample_rate(&session->audio, session->host->av_info.timing.sample_rate);
+        if (!session->paused)
+        {
+            audio_output_push(&session->audio, session->host->audio.samples, session->host->audio.frames);
+        }
     }
 
     // A core may grow its image at runtime (SET_SYSTEM_AV_INFO).

@@ -59,6 +59,58 @@ void frame_timing_update(FrameTiming* timing, bool core_running, double core_fps
     }
 }
 
+// Each loop the count of real time behind moves toward 0 by this fraction:
+// a steady error e per loop settles at e / LEAK (0.1% of a 60 Hz period:
+// 1.7 ms, far below a period) instead of adding up.
+constexpr double BEHIND_LEAK = 0.01;
+// Behind by this much of a period runs an extra frame: a missed refresh adds
+// a whole period, while ordinary jitter (loops of 0.6 then 1.4 periods)
+// stays well below it.
+constexpr double CATCH_UP_THRESHOLD = 0.9;
+
+void frame_timing_measure(FrameTiming* timing, bool running_frames)
+{
+    frame_timing_measure_at(timing, running_frames, SDL_GetTicksNS());
+}
+
+void frame_timing_measure_at(FrameTiming* timing, bool running_frames, uint64_t now_ns)
+{
+    uint64_t last = timing->last_loop_ns;
+    timing->missed = false;
+    timing->catch_up_frames = 0;
+    bool measuring = running_frames && timing->effective == TimingMode::vsync && timing->display_hz > 0.0;
+    timing->last_loop_ns = measuring ? now_ns : 0;
+    if (!measuring || last == 0 || now_ns <= last)
+    {
+        timing->behind_ns = 0.0;
+        return;
+    }
+
+    double period = static_cast<double>(NANOSECONDS_PER_SECOND) / timing->display_hz;
+    double interval = static_cast<double>(now_ns - last);
+    timing->missed = interval >= 1.5 * period;
+    if (timing->missed)
+    {
+        timing->missed_total++;
+    }
+
+    double behind = (timing->behind_ns + interval - period) * (1.0 - BEHIND_LEAK);
+    double most = static_cast<double>(FRAME_TIMING_MAX_CATCH_UP + 1) * period;
+    behind = behind < -2.0 * period ? -2.0 * period : (behind > most ? most : behind);
+    while (timing->catch_up && timing->catch_up_frames < FRAME_TIMING_MAX_CATCH_UP &&
+           behind >= CATCH_UP_THRESHOLD * period)
+    {
+        timing->catch_up_frames++;
+        behind -= period;
+    }
+    if (behind > period)
+    {
+        behind = period;   // beyond what this loop can make up: dropped, not carried
+    }
+    timing->caught_up_total += timing->catch_up_frames;
+    timing->behind_ns = behind;
+}
+
 bool frame_timing_frame_due(FrameTiming* timing)
 {
     if (timing->effective == TimingMode::vsync)

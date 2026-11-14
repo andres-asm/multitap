@@ -48,6 +48,7 @@ add_library(frontend_common STATIC
     window_size.cpp
     localization.cpp
     rate_control.cpp
+    frame_delay.cpp
 )
 
 # GameMode (deps/gamemode, BSD-3-Clause): only its client header, which
@@ -129,6 +130,12 @@ if(MULTITAP_BUILD_TESTS)
              COMMAND frontend_localization_test "${CMAKE_CURRENT_BINARY_DIR}/localization_test")
     set_tests_properties(frontend_localization PROPERTIES
                          FAIL_REGULAR_EXPRESSION "ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:")
+
+    add_executable(frontend_frame_delay_test tests/frame_delay_test.cpp)
+    target_link_libraries(frontend_frame_delay_test PRIVATE frontend_common)
+    multitap_set_project_flags(frontend_frame_delay_test)
+    add_test(NAME frontend_frame_delay COMMAND frontend_frame_delay_test)
+    set_tests_properties(frontend_frame_delay PROPERTIES PASS_REGULAR_EXPRESSION "frame delay: all checks passed")
 
     add_executable(frontend_rate_control_test tests/rate_control_test.cpp)
     target_link_libraries(frontend_rate_control_test PRIVATE frontend_common)
