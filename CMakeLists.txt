@@ -158,6 +158,19 @@ endif()
 # ---------------------------------------------------------------------------
 # Programs
 # ---------------------------------------------------------------------------
+
+# Android: only piccolo, as libmain.so for its APK (frontends/piccolo/android,
+# built with its build-apk.sh). The desktop programs and the tests don't apply.
+if(ANDROID)
+    if(MULTITAP_BUILD_TESTS)
+        message(FATAL_ERROR "Android build: configure with -DMULTITAP_BUILD_TESTS=OFF")
+    endif()
+    add_subdirectory(hosts/common)
+    add_subdirectory(frontends/common)
+    add_subdirectory(frontends/piccolo/android)
+    return()
+endif()
+
 add_subdirectory(hosts/common)
 add_subdirectory(hosts/host-libretro)
 add_subdirectory(frontends/common)
