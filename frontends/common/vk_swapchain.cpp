@@ -202,10 +202,13 @@ static bool create_render_pass(VulkanSwapchain* swapchain, const VulkanContext* 
 static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanContext* context, VkSurfaceKHR surface,
                                        uint32_t width, uint32_t height, VkSwapchainKHR old_swapchain)
 {
+    swapchain->last_create_result = VK_SUCCESS;
     VkSurfaceCapabilitiesKHR capabilities = {};
-    if (!vk_succeeded(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context->physical_device, surface, &capabilities),
-                      "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"))
+    VkResult capabilities_result =
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context->physical_device, surface, &capabilities);
+    if (!vk_succeeded(capabilities_result, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"))
     {
+        swapchain->last_create_result = capabilities_result;
         return false;
     }
 
@@ -277,10 +280,11 @@ static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanC
     }
 #endif
 
-    if (!vk_succeeded(vkCreateSwapchainKHR(context->device, &create_info, nullptr, &swapchain->swapchain),
-                      "vkCreateSwapchainKHR"))
+    VkResult create_result = vkCreateSwapchainKHR(context->device, &create_info, nullptr, &swapchain->swapchain);
+    if (!vk_succeeded(create_result, "vkCreateSwapchainKHR"))
     {
         swapchain->swapchain = VK_NULL_HANDLE;
+        swapchain->last_create_result = create_result;
         return false;
     }
 
@@ -376,6 +380,21 @@ bool vulkan_swapchain_recreate(VulkanSwapchain* swapchain, const VulkanContext* 
         vkDestroySwapchainKHR(context->device, old_swapchain, nullptr);
     }
     return ok;
+}
+
+void vulkan_swapchain_release(VulkanSwapchain* swapchain, const VulkanContext* context)
+{
+    if (context->device == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    vkDeviceWaitIdle(context->device);
+    destroy_per_image_resources(swapchain, context);
+    if (swapchain->swapchain != VK_NULL_HANDLE)
+    {
+        vkDestroySwapchainKHR(context->device, swapchain->swapchain, nullptr);
+        swapchain->swapchain = VK_NULL_HANDLE;
+    }
 }
 
 void vulkan_swapchain_destroy(VulkanSwapchain* swapchain, const VulkanContext* context)

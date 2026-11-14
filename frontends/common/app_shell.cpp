@@ -190,9 +190,89 @@ void app_shell_destroy(AppShell* shell)
 // Per frame
 // ---------------------------------------------------------------------------
 
+// Android, going to the background: the surface may already be gone (or its
+// window handed over) when the swapchain is recreated.
+static bool swapchain_failed_for_lost_surface(const VulkanSwapchain* swapchain)
+{
+    return swapchain->last_create_result == VK_ERROR_SURFACE_LOST_KHR ||
+           swapchain->last_create_result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+}
+
+// The app goes to the background (Android/iOS): the window's surface is about
+// to be destroyed (Android does it right after this event, on its UI thread),
+// so nothing may use it any more. SDL sends this event on our thread before
+// it blocks the event loop until the app comes back.
+static void release_surface(AppShell* shell)
+{
+    if (shell->surface_released)
+    {
+        return;
+    }
+    vulkan_swapchain_release(&shell->swapchain, &shell->vulkan);   // waits for the GPU first
+    if (shell->surface != VK_NULL_HANDLE)
+    {
+        SDL_Vulkan_DestroySurface(shell->vulkan.instance, shell->surface, nullptr);
+        shell->surface = VK_NULL_HANDLE;
+    }
+    shell->surface_released = true;
+    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "In the background: swapchain and surface released");
+}
+
+// Back from the background: a new surface for the window's new native window.
+// May fail while Android hasn't handed SDL the new window yet; begin_frame
+// tries again every frame.
+static bool restore_surface(AppShell* shell)
+{
+    if (!SDL_Vulkan_CreateSurface(shell->window, shell->vulkan.instance, nullptr, &shell->surface))
+    {
+        shell->surface = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // The queue family was chosen for the old surface; the spec wants the
+    // question asked again for this one (same window, so expected yes).
+    VkBool32 can_present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(shell->vulkan.physical_device, shell->vulkan.queue_family, shell->surface,
+                                         &can_present);
+    if (can_present != VK_TRUE)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_GPU, "The new surface can't be presented from queue family %u",
+                     shell->vulkan.queue_family);
+        SDL_Vulkan_DestroySurface(shell->vulkan.instance, shell->surface, nullptr);
+        shell->surface = VK_NULL_HANDLE;
+        return false;
+    }
+
+    uint32_t width = 0;
+    uint32_t height = 0;
+    if (!window_size_in_pixels(shell->window, &width, &height) ||
+        !vulkan_swapchain_create(&shell->swapchain, &shell->vulkan, shell->surface, width, height))
+    {
+        SDL_Vulkan_DestroySurface(shell->vulkan.instance, shell->surface, nullptr);
+        shell->surface = VK_NULL_HANDLE;
+        return false;
+    }
+    debug_ui_on_swapchain_recreated(&shell->swapchain);
+    shell->surface_released = false;
+    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Back in the foreground: surface and swapchain created again");
+    return true;
+}
+
 bool app_shell_process_event(AppShell* shell, const SDL_Event* event)
 {
-    (void)shell;
+    if (event->type == SDL_EVENT_DID_ENTER_BACKGROUND)
+    {
+        release_surface(shell);
+        shell->in_background = true;
+    }
+    else if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND)
+    {
+        shell->in_background = false;
+        if (shell->surface_released)
+        {
+            restore_surface(shell);   // if it fails, begin_frame tries again
+        }
+    }
     return debug_ui_process_event(event);
 }
 
@@ -207,6 +287,13 @@ bool app_shell_begin_frame(AppShell* shell)
         return false;
     }
 
+    // Background (Android/iOS): no surface to draw on until we're back.
+    if (shell->in_background || (shell->surface_released && !restore_surface(shell)))
+    {
+        SDL_Delay(10);
+        return false;
+    }
+
     // Window resized since the swapchain was built?
     uint32_t width = 0;
     uint32_t height = 0;
@@ -215,6 +302,13 @@ bool app_shell_begin_frame(AppShell* shell)
     {
         if (!recreate_swapchain(shell))
         {
+            if (swapchain_failed_for_lost_surface(&shell->swapchain))
+            {
+                // The surface went away mid-resize (Android, background).
+                release_surface(shell);
+                SDL_Delay(10);
+                return false;
+            }
             SDL_LogError(SDL_LOG_CATEGORY_GPU, "Swapchain recreation failed");
         }
     }
@@ -266,7 +360,24 @@ bool app_shell_present(AppShell* shell, ClearColor clear_color)
 
     if (result == RenderFrameResult::swapchain_needs_recreate)
     {
-        return recreate_swapchain(shell);
+        if (recreate_swapchain(shell))
+        {
+            return true;
+        }
+        // The driver may say "out of date" first when the surface is really
+        // gone (Android, going to the background): then it's not fatal.
+        if (!swapchain_failed_for_lost_surface(&shell->swapchain))
+        {
+            return false;
+        }
+        result = RenderFrameResult::surface_lost;
+    }
+    if (result == RenderFrameResult::surface_lost)
+    {
+        // Gone before the background event reached us: same as that event.
+        // begin_frame creates it again once a new window is there.
+        release_surface(shell);
+        return true;
     }
     return result == RenderFrameResult::ok;
 }

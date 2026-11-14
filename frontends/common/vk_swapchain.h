@@ -40,6 +40,12 @@ struct VulkanSwapchain
     VkImageView image_views[SWAPCHAIN_MAX_IMAGES]      = {};
     VkSemaphore render_finished[SWAPCHAIN_MAX_IMAGES]  = {};
 
+    // Why the last create/recreate failed, from the surface queries and
+    // vkCreateSwapchainKHR (VK_SUCCESS otherwise). VK_ERROR_SURFACE_LOST_KHR
+    // and VK_ERROR_NATIVE_WINDOW_IN_USE_KHR mean the window's surface is going
+    // away (Android, background), which the caller treats as not fatal.
+    VkResult last_create_result = VK_SUCCESS;
+
     // Vulkan 1.1 path only (VK_NULL_HANDLE on the 1.3 path).
     VkRenderPass  render_pass = VK_NULL_HANDLE;
     VkFramebuffer framebuffers[SWAPCHAIN_MAX_IMAGES] = {};
@@ -55,5 +61,12 @@ bool vulkan_swapchain_recreate(VulkanSwapchain* swapchain, const VulkanContext* 
                                uint32_t width, uint32_t height);
 
 void vulkan_swapchain_destroy(VulkanSwapchain* swapchain, const VulkanContext* context);
+
+// For a surface that is going away (Android/iOS: the app goes to the
+// background): waits for the device to go idle, then destroys the
+// VkSwapchainKHR and its per-image resources, but keeps the render pass (1.1
+// path) and the format, so vulkan_swapchain_create() on the new surface
+// gives pipelines built for the old one a compatible target.
+void vulkan_swapchain_release(VulkanSwapchain* swapchain, const VulkanContext* context);
 
 const char* vk_present_mode_to_string(VkPresentModeKHR mode);

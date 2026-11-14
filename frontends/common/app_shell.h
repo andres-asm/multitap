@@ -53,6 +53,12 @@ struct AppShell
     bool            sdl_ready      = false;
     bool            debug_ui_ready = false;
 
+    // Android/iOS: in the background the window's surface is destroyed. The
+    // swapchain and VkSurfaceKHR are released then and created again when the
+    // app is back (app_shell_process_event handles both events).
+    bool            in_background    = false;
+    bool            surface_released = false;
+
     // Per-frame state between begin_frame / acquire / present.
     bool              frame_started  = false;
     bool              acquire_tried  = false;
@@ -62,7 +68,8 @@ struct AppShell
 bool app_shell_create(AppShell* shell, const AppShellConfig* config);
 void app_shell_destroy(AppShell* shell);
 
-// Forward every SDL event (feeds ImGui). Returns true if ImGui used it.
+// Forward every SDL event (feeds ImGui; on Android/iOS also releases and
+// restores the Vulkan surface around the background). Returns true if ImGui used it.
 bool app_shell_process_event(AppShell* shell, const SDL_Event* event);
 
 // Recreates the swapchain if the window was resized and starts the ImGui frame.

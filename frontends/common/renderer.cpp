@@ -179,6 +179,13 @@ RenderFrameResult renderer_begin_frame(Renderer* renderer, const VulkanContext* 
         // The fence was NOT reset, so the next wait on it won't deadlock.
         return RenderFrameResult::swapchain_needs_recreate;
     }
+    if (acquire_result == VK_ERROR_SURFACE_LOST_KHR)
+    {
+        // Android destroys the surface on its UI thread when the app goes to
+        // the background, possibly before our loop sees that event. Not an
+        // error: the surface is created again when the app comes back.
+        return RenderFrameResult::surface_lost;
+    }
     if (acquire_result == VK_SUBOPTIMAL_KHR)
     {
         // Still usable: draw this frame, recreate after presenting it.
@@ -419,6 +426,11 @@ RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* co
     // Advance to the next FrameResources whatever happened, the submit already went through.
     renderer->frame_index = (renderer->frame_index + 1) % renderer->frames_in_flight;
 
+    if (present_result == VK_ERROR_SURFACE_LOST_KHR)
+    {
+        renderer->swapchain_suboptimal = false;
+        return RenderFrameResult::surface_lost;   // see renderer_begin_frame
+    }
     if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR ||
         renderer->swapchain_suboptimal)
     {

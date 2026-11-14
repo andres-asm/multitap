@@ -36,6 +36,7 @@ enum class RenderFrameResult
 {
     ok,
     swapchain_needs_recreate,   // out of date / suboptimal: recreate, then try again next frame
+    surface_lost,               // the window's surface is gone (Android, going to the background)
     error,
 };
 
