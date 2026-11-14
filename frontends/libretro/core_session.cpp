@@ -185,6 +185,11 @@ bool core_session_handle_event(CoreSession* session, AppShell* shell, const SDL_
     fixed_input_handle_event(&session->fixed_input, event, keyboard_for_joypad && !session->keyboard.game_focus,
                              session->gamepad);
 
+    if ((event->type == SDL_EVENT_WINDOW_FOCUS_LOST || event->type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
+        event->window.windowID == SDL_GetWindowID(shell->window))
+    {
+        audio_output_set_background(&session->audio, event->type == SDL_EVENT_WINDOW_FOCUS_LOST);
+    }
     if (event->type == SDL_EVENT_AUDIO_DEVICE_ADDED || event->type == SDL_EVENT_AUDIO_DEVICE_REMOVED)
     {
         if (!event->adevice.recording)

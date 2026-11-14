@@ -54,6 +54,7 @@
 //   audio_output_set_speed(&out, ratio, drc)         when the timing mode or fps changes
 //   audio_output_push(&out, samples, frames)         after every retro_run
 //   audio_output_devices_changed(&out)               on SDL_EVENT_AUDIO_DEVICE_ADDED / _REMOVED
+//   audio_output_set_background(&out, !focused)      when the window loses / gets focus
 //   audio_output_destroy(&out)                       when it stops (safe if create failed)
 
 #include <cstddef>
@@ -69,6 +70,9 @@ struct SRC_STATE_tag;
 constexpr uint32_t AUDIO_OUTPUT_MAX_QUEUED_MS    = 150;
 constexpr uint32_t AUDIO_OUTPUT_START_SILENCE_MS = 50;
 constexpr uint32_t AUDIO_OUTPUT_WARMUP_PUSHES    = 30;   // ~0.5 s at 60 fps
+// After the window gets focus back, the loop may still stall for a moment
+// (the compositor catching up): underruns are ignored this long too.
+constexpr uint64_t AUDIO_OUTPUT_FOREGROUND_GRACE_NS = 1000000000;   // 1 s
 
 // libsamplerate's sinc converters. Measured on the RK3588 (resampler_measure,
 // times real time for stereo): fastest ~95x but dulls the top of the band
@@ -113,6 +117,8 @@ struct AudioOutput
     RateControl      rate            = {};        // DRC + latency target (rate.target_ms)
     uint32_t         device_buffer_ms = 0;        // the device's own buffer (floor = 2 x this + 10)
     uint64_t         last_push_ns    = 0;
+    bool             background      = false;     // the window has no focus (audio_output_set_background)
+    uint64_t         foreground_at_ns = 0;        // when it got focus back
 
     // Scratch buffers for the float path, sized at create; they only grow if
     // a core pushes a bigger block than expected (not every frame).
@@ -120,7 +126,8 @@ struct AudioOutput
     std::vector<float> output;
 
     // Statistics for debug UIs.
-    uint64_t underruns      = 0;   // times the queue ran dry while playing
+    uint64_t underruns      = 0;   // times the queue ran dry while playing (in the foreground)
+    uint64_t background_underruns = 0;   // the same in the background: not counted above, no effect on rate control
     uint64_t dropped_frames = 0;   // stereo frames thrown away because the queue was full
 };
 
@@ -157,6 +164,13 @@ void audio_output_set_speed(AudioOutput* output, double base_ratio, bool rate_co
 // (e.g. what was learned last time). Clamped to the floor and
 // RATE_CONTROL_MAX_TARGET_MS. Takes effect at once.
 void audio_output_set_latency(AudioOutput* output, uint32_t target_ms, bool automatic);
+
+// The window lost focus (true) or got it back (false). In the background the
+// loop's timing says nothing about the machine (Wayland slows or stops vsync
+// for a hidden window; alt-tab stalls): underruns there, and for
+// AUDIO_OUTPUT_FOREGROUND_GRACE_NS after coming back, aren't counted and
+// don't raise an automatic latency target; rate control holds its speed.
+void audio_output_set_background(AudioOutput* output, bool background);
 
 // Queues `frames` stereo frames (frames * 2 int16 values).
 void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frames);

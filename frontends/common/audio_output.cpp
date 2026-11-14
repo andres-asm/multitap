@@ -394,6 +394,21 @@ void audio_output_set_latency(AudioOutput* output, uint32_t target_ms, bool auto
     rate_control_init(&output->rate, target_ms, automatic, output->device_buffer_ms * 2 + 10);
 }
 
+void audio_output_set_background(AudioOutput* output, bool background)
+{
+    if (output->background && !background)
+    {
+        output->foreground_at_ns = SDL_GetTicksNS();
+    }
+    output->background = background;
+}
+
+static bool in_background(const AudioOutput* output, uint64_t now)
+{
+    return output->background ||
+           (output->foreground_at_ns > 0 && now - output->foreground_at_ns < AUDIO_OUTPUT_FOREGROUND_GRACE_NS);
+}
+
 // DRC (rate_control.h): more queued than the target -> play a little faster,
 // less -> slower. libsamplerate glides to the new ratio within the next
 // block (no step).
@@ -402,9 +417,9 @@ static void update_rate_control(AudioOutput* output, int64_t queued_frames_now, 
     uint64_t now = SDL_GetTicksNS();
     double elapsed = output->last_push_ns > 0 ? static_cast<double>(now - output->last_push_ns) / 1e9 : 0.0;
     output->last_push_ns = now;
-    if (!output->rate_control)
+    if (!output->rate_control || in_background(output, now))
     {
-        return;
+        return;   // off, or the loop's timing means nothing now: keep the speed
     }
     double queued_ms = static_cast<double>(queued_frames_now) * 1000.0 / static_cast<double>(output->device_rate);
     double target_before = output->rate.target_ms;
@@ -449,6 +464,12 @@ void audio_output_push(AudioOutput* output, const int16_t* samples, size_t frame
         // A cushion to start from, so the first frames don't run dry at once.
         push_silence(output, AUDIO_OUTPUT_START_SILENCE_MS);
         queued = queued_frames(output);
+    }
+    else if (queued == 0 && !warming_up && in_background(output, SDL_GetTicksNS()))
+    {
+        // In the background (or just back): the loop's own fault, not the
+        // machine's. Kept apart; rate control doesn't hear about it.
+        output->background_underruns++;
     }
     else if (queued == 0 && !warming_up)
     {
