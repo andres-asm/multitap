@@ -50,6 +50,17 @@ add_library(frontend_common STATIC
     rate_control.cpp
 )
 
+# GameMode (deps/gamemode, BSD-3-Clause): only its client header, which
+# loads libgamemode at run time (nothing linked). Linux only; elsewhere a
+# stub, chosen here instead of #if in the code.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(frontend_common PRIVATE game_mode_linux.cpp)
+    target_include_directories(frontend_common SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/deps/gamemode/lib")
+    target_link_libraries(frontend_common PRIVATE ${CMAKE_DL_LIBS})
+else()
+    target_sources(frontend_common PRIVATE game_mode_none.cpp)
+endif()
+
 target_include_directories(frontend_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(frontend_common PUBLIC imgui SDL3::SDL3 Vulkan::Vulkan host_common multitap_dep_libsamplerate)
 

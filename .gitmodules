@@ -20,3 +20,6 @@
 [submodule "deps/speexdsp"]
 	path = deps/speexdsp
 	url = https://github.com/xiph/speexdsp.git
+[submodule "deps/gamemode"]
+	path = deps/gamemode
+	url = https://github.com/FeralInteractive/gamemode.git
