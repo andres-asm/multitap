@@ -135,13 +135,70 @@ static void destroy_per_image_resources(VulkanSwapchain* swapchain, const Vulkan
             vkDestroySemaphore(context->device, swapchain->render_finished[i], nullptr);
             swapchain->render_finished[i] = VK_NULL_HANDLE;
         }
+        if (swapchain->framebuffers[i] != VK_NULL_HANDLE)
+        {
+            vkDestroyFramebuffer(context->device, swapchain->framebuffers[i], nullptr);
+            swapchain->framebuffers[i] = VK_NULL_HANDLE;
+        }
         swapchain->images[i] = VK_NULL_HANDLE;   // owned by the swapchain, not destroyed by us
     }
     swapchain->image_count = 0;
 }
 
+// Vulkan 1.1 path: the render pass that draws one frame into a swapchain image.
+// It does the work the 1.3 path does with two barriers (renderer.cpp):
+//   - initialLayout UNDEFINED + loadOp CLEAR: the old contents don't matter.
+//   - finalLayout PRESENT_SRC: ready to present when the pass ends.
+// The dependency from outside the pass waits at COLOR_ATTACHMENT_OUTPUT, the
+// stage the submit waits on the image-acquired semaphore: the layout change and
+// clear happen only once the image is really ours. After the pass, the
+// implicit dependency is enough: presentation is ordered by the render-finished
+// semaphore.
+static bool create_render_pass(VulkanSwapchain* swapchain, const VulkanContext* context)
+{
+    VkAttachmentDescription color_attachment = {
+        .format         = swapchain->surface_format.format,
+        .samples        = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+    VkAttachmentReference color_reference = {
+        .attachment = 0,
+        .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments    = &color_reference,
+    };
+    VkSubpassDependency from_outside = {
+        .srcSubpass    = VK_SUBPASS_EXTERNAL,
+        .dstSubpass    = 0,
+        .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    };
+    VkRenderPassCreateInfo render_pass_info = {
+        .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments    = &color_attachment,
+        .subpassCount    = 1,
+        .pSubpasses      = &subpass,
+        .dependencyCount = 1,
+        .pDependencies   = &from_outside,
+    };
+    return vk_succeeded(vkCreateRenderPass(context->device, &render_pass_info, nullptr, &swapchain->render_pass),
+                        "vkCreateRenderPass");
+}
+
 // Creates a new VkSwapchainKHR (reusing `old_swapchain` if given) plus its
-// views and per-image semaphores. Does not destroy `old_swapchain`.
+// views and per-image semaphores (and, on the 1.1 path, the render pass the
+// first time and a framebuffer per image). Does not destroy `old_swapchain`.
 static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanContext* context, VkSurfaceKHR surface,
                                        uint32_t width, uint32_t height, VkSwapchainKHR old_swapchain)
 {
@@ -152,11 +209,27 @@ static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanC
         return false;
     }
 
+    VkFormat previous_format = swapchain->surface_format.format;
     swapchain->surface_format = choose_surface_format(context->physical_device, surface);
     if (swapchain->surface_format.format == VK_FORMAT_UNDEFINED)
     {
         SDL_LogError(SDL_LOG_CATEGORY_GPU, "Surface reports no formats");
         return false;
+    }
+    if (swapchain->render_pass != VK_NULL_HANDLE && swapchain->surface_format.format != previous_format)
+    {
+        // The render pass (and the pipelines built for it) would no longer match.
+        // Same surface, same choice: not expected to happen.
+        SDL_LogError(SDL_LOG_CATEGORY_GPU, "The swapchain format changed (%d -> %d) on the Vulkan 1.1 path",
+                     static_cast<int>(previous_format), static_cast<int>(swapchain->surface_format.format));
+        return false;
+    }
+    if (context->path == VulkanPath::vulkan_1_1 && swapchain->render_pass == VK_NULL_HANDLE)
+    {
+        if (!create_render_pass(swapchain, context))
+        {
+            return false;
+        }
     }
     swapchain->present_mode = choose_present_mode(context->physical_device, surface, swapchain->vsync);
 
@@ -251,6 +324,24 @@ static bool create_swapchain_resources(VulkanSwapchain* swapchain, const VulkanC
         {
             return false;
         }
+
+        if (swapchain->render_pass != VK_NULL_HANDLE)
+        {
+            VkFramebufferCreateInfo framebuffer_info = {
+                .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass      = swapchain->render_pass,
+                .attachmentCount = 1,
+                .pAttachments    = &swapchain->image_views[i],
+                .width           = swapchain->extent.width,
+                .height          = swapchain->extent.height,
+                .layers          = 1,
+            };
+            if (!vk_succeeded(vkCreateFramebuffer(context->device, &framebuffer_info, nullptr, &swapchain->framebuffers[i]),
+                              "vkCreateFramebuffer"))
+            {
+                return false;
+            }
+        }
     }
 
     SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Swapchain %ux%u, %u images, format %d, present mode %s",
@@ -296,6 +387,11 @@ void vulkan_swapchain_destroy(VulkanSwapchain* swapchain, const VulkanContext* c
 
     destroy_per_image_resources(swapchain, context);
 
+    if (swapchain->render_pass != VK_NULL_HANDLE)
+    {
+        vkDestroyRenderPass(context->device, swapchain->render_pass, nullptr);
+        swapchain->render_pass = VK_NULL_HANDLE;
+    }
     if (swapchain->swapchain != VK_NULL_HANDLE)
     {
         vkDestroySwapchainKHR(context->device, swapchain->swapchain, nullptr);

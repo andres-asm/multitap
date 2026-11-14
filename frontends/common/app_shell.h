@@ -35,6 +35,11 @@ struct AppShellConfig
     const char* identifier     = "org.multitap.frontend";
     int32_t     window_width   = 1920;          // clamped to the screen's usable area
     int32_t     window_height  = 1080;
+
+    // Use the Vulkan 1.1 path (render passes) even on a 1.3 GPU. Also turned
+    // on by the environment variable MULTITAP_VULKAN_1_1=1, to test that path
+    // on a desktop GPU without changing the program.
+    bool        force_vulkan_1_1 = false;
 };
 
 // Zero/null-initialized, so app_shell_destroy() is safe at any point during startup.

@@ -50,6 +50,10 @@ struct Picture
     ViewportResult viewport = {};
     bool           use_copy = false;
     bool           ready    = false;
+
+    // From the context (picture_prepare): how picture_record records its barriers.
+    VulkanPath                path     = VulkanPath::vulkan_1_3;
+    PFN_vkCmdPipelineBarrier2 barrier2 = nullptr;
 };
 
 // Frees the copy. Waits for the GPU. Safe on an empty Picture.

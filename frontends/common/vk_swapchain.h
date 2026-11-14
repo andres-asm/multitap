@@ -8,6 +8,12 @@
 // A render-finished semaphore is waited on by vkQueuePresentKHR, and we only
 // know that wait is over when the same image is acquired again. Indexing it
 // by swapchain image is what guarantees it is never re-signaled too early.
+//
+// On the Vulkan 1.1 path (VulkanPath in vk_context.h) the swapchain also owns
+// the render pass that draws into its images and one framebuffer per image.
+// The render pass lives as long as the swapchain object: pipelines (ImGui's)
+// are built for it, so recreating the swapchain keeps it (the image format
+// must stay the same).
 
 #include <cstdint>
 #include <vulkan/vulkan.h>
@@ -33,6 +39,10 @@ struct VulkanSwapchain
     VkImage     images[SWAPCHAIN_MAX_IMAGES]           = {};
     VkImageView image_views[SWAPCHAIN_MAX_IMAGES]      = {};
     VkSemaphore render_finished[SWAPCHAIN_MAX_IMAGES]  = {};
+
+    // Vulkan 1.1 path only (VK_NULL_HANDLE on the 1.3 path).
+    VkRenderPass  render_pass = VK_NULL_HANDLE;
+    VkFramebuffer framebuffers[SWAPCHAIN_MAX_IMAGES] = {};
 };
 
 // width/height: window size in PIXELS (SDL_GetWindowSizeInPixels).

@@ -16,6 +16,7 @@
 #include <vulkan/vulkan.h>
 
 #include "renderer.h"   // FRAMES_IN_FLIGHT
+#include "vk_context.h"   // VulkanPath
 
 struct VulkanContext;
 
@@ -38,6 +39,10 @@ struct StreamingTexture
     uint32_t content_width  = 0;   // size of the last upload
     uint32_t content_height = 0;
     bool     has_content    = false;   // false until the first upload: don't draw it before that
+
+    // From the context at creation: how uploads record their barriers (vk_barrier.h).
+    VulkanPath                path     = VulkanPath::vulkan_1_3;
+    PFN_vkCmdPipelineBarrier2 barrier2 = nullptr;
 };
 
 bool streaming_texture_create(StreamingTexture* texture, const VulkanContext* context, uint32_t width, uint32_t height);

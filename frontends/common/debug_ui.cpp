@@ -58,7 +58,7 @@ bool debug_ui_init(SDL_Window* window, const VulkanContext* context, const Vulka
     }
 
     ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.ApiVersion     = VULKAN_REQUIRED_API_VERSION;
+    init_info.ApiVersion     = context->api_version;
     init_info.Instance       = context->instance;
     init_info.PhysicalDevice = context->physical_device;
     init_info.Device         = context->device;
@@ -69,15 +69,26 @@ bool debug_ui_init(SDL_Window* window, const VulkanContext* context, const Vulka
     init_info.ImageCount     = swapchain->image_count;
     init_info.CheckVkResultFn = imgui_check_vk_result;
 
-    // Dynamic rendering: imgui builds its pipeline for our swapchain format.
-    // (The backend copies the format array, so a stack variable is fine.)
+    // 1.3 path, dynamic rendering: imgui builds its pipeline for our swapchain
+    // format. (The backend copies the format array, so a stack variable is fine.)
+    // 1.1 path: for the swapchain's render pass (subpass 0), which lives as
+    // long as the swapchain object, so the handle stays valid for imgui.
     VkFormat color_format = swapchain->surface_format.format;
-    init_info.UseDynamicRendering = true;
-    init_info.PipelineInfoMain.PipelineRenderingCreateInfo = {
-        .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-        .colorAttachmentCount    = 1,
-        .pColorAttachmentFormats = &color_format,
-    };
+    if (context->path == VulkanPath::vulkan_1_3)
+    {
+        init_info.UseDynamicRendering = true;
+        init_info.PipelineInfoMain.PipelineRenderingCreateInfo = {
+            .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount    = 1,
+            .pColorAttachmentFormats = &color_format,
+        };
+    }
+    else
+    {
+        init_info.UseDynamicRendering = false;
+        init_info.PipelineInfoMain.RenderPass = swapchain->render_pass;
+        init_info.PipelineInfoMain.Subpass = 0;
+    }
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     if (!ImGui_ImplVulkan_Init(&init_info))

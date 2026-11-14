@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL_log.h>
 
+#include "vk_barrier.h"
 #include "vk_context.h"
 #include "vk_swapchain.h"
 
@@ -62,6 +63,10 @@ bool renderer_create(Renderer* renderer, const VulkanContext* context)
     renderer->frame_index = 0;
     renderer->image_index = 0;
     renderer->swapchain_suboptimal = false;
+    renderer->path = context->path;
+    renderer->cmd_pipeline_barrier2 = context->cmd_pipeline_barrier2;
+    renderer->cmd_begin_rendering = context->cmd_begin_rendering;
+    renderer->cmd_end_rendering = context->cmd_end_rendering;
     return true;
 }
 
@@ -107,10 +112,11 @@ uint32_t renderer_frame_index(const Renderer* renderer)
 }
 
 // ---------------------------------------------------------------------------
-// Layout transitions
+// Layout transitions (Vulkan 1.3 path; on the 1.1 path the swapchain's render
+// pass does both, see create_render_pass in vk_swapchain.cpp)
 // ---------------------------------------------------------------------------
 
-static void transition_to_color_attachment(VkCommandBuffer command_buffer, VkImage image)
+static void transition_to_color_attachment(const Renderer* renderer, VkCommandBuffer command_buffer, VkImage image)
 {
     // UNDEFINED: we clear the whole image anyway, so the old contents don't matter.
     // The stage matches the wait stage of the image-acquired semaphore in the submit.
@@ -127,16 +133,10 @@ static void transition_to_color_attachment(VkCommandBuffer command_buffer, VkIma
         .image         = image,
         .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
     };
-
-    VkDependencyInfo dependency = {
-        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &barrier,
-    };
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vk_cmd_image_barriers(command_buffer, renderer->path, renderer->cmd_pipeline_barrier2, &barrier, 1);
 }
 
-static void transition_to_present(VkCommandBuffer command_buffer, VkImage image)
+static void transition_to_present(const Renderer* renderer, VkCommandBuffer command_buffer, VkImage image)
 {
     // Presentation is ordered by the render-finished semaphore, so no dst stage/access is needed.
     VkImageMemoryBarrier2 barrier = {
@@ -152,13 +152,7 @@ static void transition_to_present(VkCommandBuffer command_buffer, VkImage image)
         .image         = image,
         .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
     };
-
-    VkDependencyInfo dependency = {
-        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &barrier,
-    };
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vk_cmd_image_barriers(command_buffer, renderer->path, renderer->cmd_pipeline_barrier2, &barrier, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +213,28 @@ void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapcha
 {
     FrameResources* frame = &renderer->frames[renderer->frame_index];
 
-    transition_to_color_attachment(frame->command_buffer, swapchain->images[renderer->image_index]);
+    VkClearValue clear_value = {};
+    clear_value.color.float32[0] = clear_color.r;
+    clear_value.color.float32[1] = clear_color.g;
+    clear_value.color.float32[2] = clear_color.b;
+    clear_value.color.float32[3] = clear_color.a;
+
+    if (renderer->path == VulkanPath::vulkan_1_1)
+    {
+        // The render pass changes the layout and clears (see vk_swapchain.cpp).
+        VkRenderPassBeginInfo begin_info = {
+            .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass      = swapchain->render_pass,
+            .framebuffer     = swapchain->framebuffers[renderer->image_index],
+            .renderArea      = { { 0, 0 }, swapchain->extent },
+            .clearValueCount = 1,
+            .pClearValues    = &clear_value,
+        };
+        vkCmdBeginRenderPass(frame->command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
+        return;
+    }
+
+    transition_to_color_attachment(renderer, frame->command_buffer, swapchain->images[renderer->image_index]);
 
     VkRenderingAttachmentInfo color_attachment = {
         .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -227,11 +242,8 @@ void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapcha
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue  = clear_value,
     };
-    color_attachment.clearValue.color.float32[0] = clear_color.r;
-    color_attachment.clearValue.color.float32[1] = clear_color.g;
-    color_attachment.clearValue.color.float32[2] = clear_color.b;
-    color_attachment.clearValue.color.float32[3] = clear_color.a;
 
     VkRenderingInfo rendering_info = {
         .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -240,7 +252,7 @@ void renderer_begin_rendering(Renderer* renderer, const VulkanSwapchain* swapcha
         .colorAttachmentCount = 1,
         .pColorAttachments    = &color_attachment,
     };
-    vkCmdBeginRendering(frame->command_buffer, &rendering_info);
+    renderer->cmd_begin_rendering(frame->command_buffer, &rendering_info);
 }
 
 // Low latency: wait until the frame is on screen (present wait) or, without
@@ -287,21 +299,10 @@ void renderer_set_frames_in_flight(Renderer* renderer, const VulkanContext* cont
     SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Frames in flight: %u", count);
 }
 
-RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* context,
-                                     const VulkanSwapchain* swapchain)
+// Vulkan 1.3 path: the same submit as the 1.1 path's vkQueueSubmit, with
+// synchronization2's structs.
+static bool submit_vulkan_1_3(const VulkanContext* context, const FrameResources* frame, VkSemaphore render_finished)
 {
-    FrameResources* frame = &renderer->frames[renderer->frame_index];
-    VkSemaphore render_finished = swapchain->render_finished[renderer->image_index];
-
-    vkCmdEndRendering(frame->command_buffer);
-    transition_to_present(frame->command_buffer, swapchain->images[renderer->image_index]);
-
-    if (!vk_succeeded(vkEndCommandBuffer(frame->command_buffer), "vkEndCommandBuffer"))
-    {
-        return RenderFrameResult::error;
-    }
-
-    // Submit: wait for the image, signal render_finished (per IMAGE) and the frame fence.
     VkSemaphoreSubmitInfo wait_info = {
         .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
         .semaphore = frame->image_acquired,
@@ -325,7 +326,54 @@ RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* co
         .signalSemaphoreInfoCount = 1,
         .pSignalSemaphoreInfos    = &signal_info,
     };
-    if (!vk_succeeded(vkQueueSubmit2(context->queue, 1, &submit_info, frame->in_flight_fence), "vkQueueSubmit2"))
+    return vk_succeeded(context->queue_submit2(context->queue, 1, &submit_info, frame->in_flight_fence),
+                        "vkQueueSubmit2");
+}
+
+RenderFrameResult renderer_end_frame(Renderer* renderer, const VulkanContext* context,
+                                     const VulkanSwapchain* swapchain)
+{
+    FrameResources* frame = &renderer->frames[renderer->frame_index];
+    VkSemaphore render_finished = swapchain->render_finished[renderer->image_index];
+
+    if (renderer->path == VulkanPath::vulkan_1_1)
+    {
+        vkCmdEndRenderPass(frame->command_buffer);   // also moves the image to PRESENT_SRC
+    }
+    else
+    {
+        renderer->cmd_end_rendering(frame->command_buffer);
+        transition_to_present(renderer, frame->command_buffer, swapchain->images[renderer->image_index]);
+    }
+
+    if (!vk_succeeded(vkEndCommandBuffer(frame->command_buffer), "vkEndCommandBuffer"))
+    {
+        return RenderFrameResult::error;
+    }
+
+    // Submit: wait for the image, signal render_finished (per IMAGE) and the frame fence.
+    // Both paths wait at COLOR_ATTACHMENT_OUTPUT: the first write to the image
+    // (clear) happens there, and the barrier / render pass dependency that
+    // changes its layout waits on that stage too.
+    if (renderer->path == VulkanPath::vulkan_1_1)
+    {
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo classic_submit = {
+            .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount   = 1,
+            .pWaitSemaphores      = &frame->image_acquired,
+            .pWaitDstStageMask    = &wait_stage,
+            .commandBufferCount   = 1,
+            .pCommandBuffers      = &frame->command_buffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores    = &render_finished,
+        };
+        if (!vk_succeeded(vkQueueSubmit(context->queue, 1, &classic_submit, frame->in_flight_fence), "vkQueueSubmit"))
+        {
+            return RenderFrameResult::error;
+        }
+    }
+    else if (!submit_vulkan_1_3(context, frame, render_finished))
     {
         return RenderFrameResult::error;
     }

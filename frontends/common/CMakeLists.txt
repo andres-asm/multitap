@@ -33,6 +33,7 @@ endif()
 
 add_library(frontend_common STATIC
     vk_context.cpp
+    vk_barrier.cpp
     vk_swapchain.cpp
     renderer.cpp
     debug_ui.cpp

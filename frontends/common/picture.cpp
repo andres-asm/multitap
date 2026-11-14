@@ -5,6 +5,7 @@
 #include "imgui.h"
 
 #include "debug_ui.h"
+#include "vk_barrier.h"
 #include "vk_context.h"
 
 // ---------------------------------------------------------------------------
@@ -122,6 +123,8 @@ bool picture_prepare(Picture* picture, const VulkanContext* context, const Strea
 {
     picture->ready = false;
     picture->use_copy = false;
+    picture->path = context->path;
+    picture->barrier2 = context->cmd_pipeline_barrier2;
     if (!source->has_content || viewport->width == 0 || viewport->height == 0 || viewport->source_width == 0 ||
         viewport->source_height == 0)
     {
@@ -253,12 +256,7 @@ void picture_record(Picture* picture, VkCommandBuffer command_buffer, StreamingT
             .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
         },
     };
-    VkDependencyInfo before_dependency = {
-        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 2,
-        .pImageMemoryBarriers    = before,
-    };
-    vkCmdPipelineBarrier2(command_buffer, &before_dependency);
+    vk_cmd_image_barriers(command_buffer, picture->path, picture->barrier2, before, 2);
 
     // Nearest: the copy is a whole multiple of the shown part, so every
     // source pixel becomes an exact block.
@@ -308,12 +306,7 @@ void picture_record(Picture* picture, VkCommandBuffer command_buffer, StreamingT
             .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
         },
     };
-    VkDependencyInfo after_dependency = {
-        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 2,
-        .pImageMemoryBarriers    = after,
-    };
-    vkCmdPipelineBarrier2(command_buffer, &after_dependency);
+    vk_cmd_image_barriers(command_buffer, picture->path, picture->barrier2, after, 2);
 
     picture->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     source->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

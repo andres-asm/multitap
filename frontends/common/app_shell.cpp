@@ -110,6 +110,9 @@ bool app_shell_create(AppShell* shell, const AppShellConfig* config)
         return false;
     }
 
+    const char* force_1_1 = SDL_getenv("MULTITAP_VULKAN_1_1");
+    shell->vulkan.force_vulkan_1_1 =
+        config->force_vulkan_1_1 || (force_1_1 != nullptr && force_1_1[0] != '\0' && force_1_1[0] != '0');
     if (!vulkan_context_create_device(&shell->vulkan, shell->surface))
     {
         return false;

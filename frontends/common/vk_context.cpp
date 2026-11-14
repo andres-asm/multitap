@@ -43,6 +43,16 @@ const char* vk_result_to_string(VkResult result)
     }
 }
 
+const char* vulkan_path_to_string(VulkanPath path)
+{
+    switch (path)
+    {
+        case VulkanPath::vulkan_1_3: return "Vulkan 1.3 (dynamic rendering)";
+        case VulkanPath::vulkan_1_1: return "Vulkan 1.1 (render passes)";
+    }
+    return "unknown";
+}
+
 bool vk_succeeded(VkResult result, const char* what)
 {
     if (result == VK_SUCCESS)
@@ -188,9 +198,9 @@ bool vulkan_context_create_instance(VulkanContext* context,
     {
         return false;
     }
-    if (loader_version < VULKAN_REQUIRED_API_VERSION)
+    if (loader_version < VULKAN_MINIMUM_API_VERSION)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_GPU, "Vulkan loader is %u.%u, we need 1.3",
+        SDL_LogError(SDL_LOG_CATEGORY_GPU, "Vulkan loader is %u.%u, we need 1.1",
                      VK_API_VERSION_MAJOR(loader_version), VK_API_VERSION_MINOR(loader_version));
         return false;
     }
@@ -257,7 +267,9 @@ bool vulkan_context_create_instance(VulkanContext* context,
         .applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0),
         .pEngineName        = "multitap",
         .engineVersion      = VK_MAKE_API_VERSION(0, 0, 1, 0),
-        .apiVersion         = VULKAN_REQUIRED_API_VERSION,
+        // The highest version we use. Since 1.1 loaders accept any value here,
+        // and each device is then used as min(its version, this).
+        .apiVersion         = VULKAN_PREFERRED_API_VERSION,
     };
 
     // Chaining the messenger info here also reports problems inside vkCreateInstance itself.
@@ -332,8 +344,17 @@ static uint32_t find_graphics_present_queue_family(VkPhysicalDevice physical_dev
     return result;
 }
 
-static bool device_has_required_features(VkPhysicalDevice physical_device)
+// Whether the device can take the 1.3 path: version 1.3 with dynamic rendering
+// and synchronization2 (both are required features in 1.3, but the check is cheap).
+static bool device_supports_vulkan_1_3_path(VkPhysicalDevice physical_device)
 {
+    VkPhysicalDeviceProperties properties = {};
+    vkGetPhysicalDeviceProperties(physical_device, &properties);
+    if (properties.apiVersion < VK_API_VERSION_1_3)
+    {
+        return false;
+    }
+
     VkPhysicalDeviceVulkan13Features features13 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
     };
@@ -352,15 +373,11 @@ static uint32_t score_physical_device(VkPhysicalDevice physical_device, VkSurfac
     VkPhysicalDeviceProperties properties = {};
     vkGetPhysicalDeviceProperties(physical_device, &properties);
 
-    if (properties.apiVersion < VULKAN_REQUIRED_API_VERSION)
+    if (properties.apiVersion < VULKAN_MINIMUM_API_VERSION)
     {
         return 0;
     }
     if (!device_extension_available(physical_device, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
-    {
-        return 0;
-    }
-    if (!device_has_required_features(physical_device))
     {
         return 0;
     }
@@ -369,13 +386,16 @@ static uint32_t score_physical_device(VkPhysicalDevice physical_device, VkSurfac
         return 0;
     }
 
+    uint32_t type_score = 1;   // CPU (lavapipe) and others
     switch (properties.deviceType)
     {
-        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 4;
-        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3;
-        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 2;
-        default:                                     return 1;   // CPU (lavapipe) and others
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   type_score = 4; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: type_score = 3; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    type_score = 2; break;
+        default:                                     break;
     }
+    // The GPU type decides; between two of the same type, the one with the 1.3 path wins.
+    return type_score * 2 + (device_supports_vulkan_1_3_path(physical_device) ? 1 : 0);
 }
 
 static bool select_physical_device(VulkanContext* context, VkSurfaceKHR surface)
@@ -414,13 +434,22 @@ static bool select_physical_device(VulkanContext* context, VkSurfaceKHR surface)
 
     if (best_device == VK_NULL_HANDLE)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_GPU, "No GPU supports Vulkan 1.3 + dynamic rendering + presenting to this window");
+        SDL_LogError(SDL_LOG_CATEGORY_GPU, "No GPU supports Vulkan 1.1 + presenting to this window");
         return false;
     }
 
     context->physical_device = best_device;
     vkGetPhysicalDeviceProperties(best_device, &context->physical_device_properties);
     context->queue_family = find_graphics_present_queue_family(best_device, surface);
+
+    uint32_t device_version = context->physical_device_properties.apiVersion;
+    context->api_version = device_version < VULKAN_PREFERRED_API_VERSION ? device_version : VULKAN_PREFERRED_API_VERSION;
+    bool has_1_3_path = device_supports_vulkan_1_3_path(best_device);
+    context->path = (has_1_3_path && !context->force_vulkan_1_1) ? VulkanPath::vulkan_1_3 : VulkanPath::vulkan_1_1;
+    if (has_1_3_path && context->force_vulkan_1_1)
+    {
+        SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "The GPU has Vulkan 1.3, but the 1.1 path was asked for");
+    }
     return true;
 }
 
@@ -561,11 +590,10 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
         .pQueuePriorities = &queue_priority,
     };
 
-    VkPhysicalDeviceVulkan13Features features13 = {
-        .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-        .synchronization2 = VK_TRUE,
-        .dynamicRendering = VK_TRUE,
-    };
+    // Feature structs go in one pNext chain. present_wait_features is where the
+    // (optional) present wait features start; the 1.3 features go in front of
+    // them on the 1.3 path.
+    void* present_wait_features = nullptr;
 
     // Present wait (optional): its extensions and features go in the chain.
     context->present_wait_version = find_present_wait(context, surface);
@@ -584,7 +612,7 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
         extension_count++;
         extensions[extension_count] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
         extension_count++;
-        features13.pNext = &present_id;
+        present_wait_features = &present_id;
     }
 #if defined(VK_KHR_present_wait2)
     VkPhysicalDevicePresentWait2FeaturesKHR present_wait2 = {
@@ -602,13 +630,25 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
         extension_count++;
         extensions[extension_count] = VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME;
         extension_count++;
-        features13.pNext = &present_id2;
+        present_wait_features = &present_id2;
     }
 #endif
 
+    VkPhysicalDeviceVulkan13Features features13 = {
+        .sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+        .pNext            = present_wait_features,
+        .synchronization2 = VK_TRUE,
+        .dynamicRendering = VK_TRUE,
+    };
+    void* features_chain = present_wait_features;
+    if (context->path == VulkanPath::vulkan_1_3)
+    {
+        features_chain = &features13;
+    }
+
     VkDeviceCreateInfo device_info = {
         .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext                   = &features13,
+        .pNext                   = features_chain,
         .queueCreateInfoCount    = 1,
         .pQueueCreateInfos       = &queue_info,
         .enabledExtensionCount   = extension_count,
@@ -621,6 +661,24 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
     }
 
     vkGetDeviceQueue(context->device, context->queue_family, 0, &context->queue);
+
+    if (context->path == VulkanPath::vulkan_1_3)
+    {
+        context->cmd_pipeline_barrier2 = reinterpret_cast<PFN_vkCmdPipelineBarrier2>(
+            vkGetDeviceProcAddr(context->device, "vkCmdPipelineBarrier2"));
+        context->queue_submit2 = reinterpret_cast<PFN_vkQueueSubmit2>(
+            vkGetDeviceProcAddr(context->device, "vkQueueSubmit2"));
+        context->cmd_begin_rendering = reinterpret_cast<PFN_vkCmdBeginRendering>(
+            vkGetDeviceProcAddr(context->device, "vkCmdBeginRendering"));
+        context->cmd_end_rendering = reinterpret_cast<PFN_vkCmdEndRendering>(
+            vkGetDeviceProcAddr(context->device, "vkCmdEndRendering"));
+        if (context->cmd_pipeline_barrier2 == nullptr || context->queue_submit2 == nullptr ||
+            context->cmd_begin_rendering == nullptr || context->cmd_end_rendering == nullptr)
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_GPU, "The device says Vulkan 1.3 but doesn't return its functions");
+            return false;
+        }
+    }
 
     // Extension functions come from the device (the loader doesn't export them).
     if (context->present_wait_version == 1)
@@ -645,8 +703,9 @@ bool vulkan_context_create_device(VulkanContext* context, VkSurfaceKHR surface)
         return false;
     }
 
-    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Using GPU: %s (queue family %u)",
-                context->physical_device_properties.deviceName, context->queue_family);
+    SDL_LogInfo(SDL_LOG_CATEGORY_GPU, "Using GPU: %s (queue family %u), %s",
+                context->physical_device_properties.deviceName, context->queue_family,
+                vulkan_path_to_string(context->path));
     return true;
 }
 
@@ -669,6 +728,10 @@ void vulkan_context_destroy(VulkanContext* context)
         vkDestroyDevice(context->device, nullptr);
         context->device = VK_NULL_HANDLE;
         context->queue = VK_NULL_HANDLE;
+        context->cmd_pipeline_barrier2 = nullptr;
+        context->queue_submit2 = nullptr;
+        context->cmd_begin_rendering = nullptr;
+        context->cmd_end_rendering = nullptr;
     }
 
     if (context->debug_messenger != VK_NULL_HANDLE)
