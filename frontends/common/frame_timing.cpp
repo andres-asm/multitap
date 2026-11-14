@@ -88,21 +88,27 @@ void frame_timing_measure_at(FrameTiming* timing, bool running_frames, uint64_t 
 
     double period = static_cast<double>(NANOSECONDS_PER_SECOND) / timing->display_hz;
     double interval = static_cast<double>(now_ns - last);
-    timing->missed = interval >= 1.5 * period;
+
+    // Lost refreshes: whole periods the core frames are behind. A refresh can
+    // be lost in one long loop or spread over several slightly long ones
+    // (1.0 + 1.4 + ...: seen with a frame delay just too long, where no single
+    // loop reaches 1.5 periods), so the count of time behind decides, not
+    // one loop's length. Counted once whether or not catch-up runs them.
+    double behind = (timing->behind_ns + interval - period) * (1.0 - BEHIND_LEAK);
+    double most = static_cast<double>(FRAME_TIMING_MAX_CATCH_UP + 1) * period;
+    behind = behind < -2.0 * period ? -2.0 * period : (behind > most ? most : behind);
+    uint32_t lost = 0;
+    while (lost < FRAME_TIMING_MAX_CATCH_UP && behind >= CATCH_UP_THRESHOLD * period)
+    {
+        lost++;
+        behind -= period;
+    }
+    timing->missed = lost > 0 || interval >= 1.5 * period;
     if (timing->missed)
     {
         timing->missed_total++;
     }
-
-    double behind = (timing->behind_ns + interval - period) * (1.0 - BEHIND_LEAK);
-    double most = static_cast<double>(FRAME_TIMING_MAX_CATCH_UP + 1) * period;
-    behind = behind < -2.0 * period ? -2.0 * period : (behind > most ? most : behind);
-    while (timing->catch_up && timing->catch_up_frames < FRAME_TIMING_MAX_CATCH_UP &&
-           behind >= CATCH_UP_THRESHOLD * period)
-    {
-        timing->catch_up_frames++;
-        behind -= period;
-    }
+    timing->catch_up_frames = timing->catch_up ? lost : 0;
     if (behind > period)
     {
         behind = period;   // beyond what this loop can make up: dropped, not carried

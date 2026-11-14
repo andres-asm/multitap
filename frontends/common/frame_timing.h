@@ -15,8 +15,10 @@
 //          natural mode for FreeSync/G-Sync displays.
 //
 // Missed refreshes and catch-up (Vsync; decided by Andrés 2026-11-14): a
-// loop that takes 1.5 refresh periods or more missed a refresh (the system
-// stalled: a slow frame, the CPU clock dropping). In Vsync each loop runs one
+// missed refresh is the core frames falling a whole period behind real time
+// (the system stalled: a slow frame, the CPU clock dropping, a frame delay
+// too long), whether in one long loop or spread over several slightly long
+// ones; a loop of 1.5 periods or more counts as missed too. In Vsync each loop runs one
 // core frame, so a missed refresh is a core frame lost for good, and its
 // audio with it (the queue drains; DRC's 0.5% can't give it back quickly).
 // frame_timing_measure() keeps how much real time the core frames are behind
